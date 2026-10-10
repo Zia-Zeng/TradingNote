@@ -6,6 +6,7 @@ import Report from './pages/Report';
 import Strategy from './pages/Strategy';
 import Agent from './pages/Agent';
 import Detail from './pages/Detail';
+import DayDetail from './pages/DayDetail';
 
 export default function App() {
   const Router = import.meta.env.BASE_URL === '/' ? BrowserRouter : HashRouter;
@@ -18,6 +19,7 @@ export default function App() {
           <Route path="/strategy" element={<Strategy />} />
           <Route path="/agent" element={<Agent />} />
           <Route path="/detail/:id" element={<Detail />} />
+          <Route path="/day/:date" element={<DayDetail />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

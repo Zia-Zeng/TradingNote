@@ -5,6 +5,8 @@ import {
   ChevronRight, ArrowUpRight, ShieldAlert, Plus, X, Tag, Sparkles, Target
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import TradingCalendar from '../components/TradingCalendar';
+import Attention from '../components/Attention';
 
 const Sparkline = ({ data, isPositive }: { data: number[], isPositive: boolean }) => {
   const color = isPositive ? '#10b981' : '#f43f5e';
@@ -222,7 +224,11 @@ export default function Home() {
             </div>
           )}
         </div>
-        
+
+        <TradingCalendar />
+
+        <Attention />
+
         {/* Portfolio Performance */}
         <div className="pt-1">
           <div className="flex justify-between items-center mb-2 px-1">
