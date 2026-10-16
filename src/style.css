@@ -94,3 +94,30 @@ html, body, #root { margin: 0; width: 100%; height: 100%; }
 .phone-button-volume-up { top: 26%; left: -4px; height: 6%; }
 .phone-button-volume-down { top: 34%; left: -4px; height: 6%; }
 .phone-button-side { top: 27%; right: -4px; height: 9%; }
+
+@media (max-width: 600px) {
+  .demo-stage {
+    background: #f8f9fa;
+  }
+
+  .phone-frame {
+    width: 100%;
+    height: 100dvh;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    transform: none !important;
+  }
+
+  .phone-frame::before,
+  .phone-button,
+  .dynamic-island {
+    display: none;
+  }
+
+  .phone-screen {
+    border-radius: 0;
+  }
+}
