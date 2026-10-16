@@ -183,7 +183,12 @@ export default function Agent() {
             </div>
             {!showDetail && (
               <button 
-                onClick={() => setSearchParams({ tab: 'backtest', bt_step: '3', strategy: strat || undefined, ticker: tick || undefined, task_detail: '1' })}
+                onClick={() => {
+                  const next = new URLSearchParams({ tab: 'backtest', bt_step: '3', task_detail: '1' });
+                  if (strat) next.set('strategy', strat);
+                  if (tick) next.set('ticker', tick);
+                  setSearchParams(next);
+                }}
                 className="w-full bg-white border border-slate-200 text-[#0B2545] py-2 rounded-lg text-[11px] font-bold active:bg-slate-50 shadow-sm"
               >
                 View Full Chart
