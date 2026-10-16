@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ChevronLeft, Sparkles, Edit3, X, Plus, BotMessageSquare } from 'lucide-react';
 import { cn } from '../lib/utils';
-import StatusBar from '../components/mobile-shell/status-bar';
 import TradesModule from '../components/TradesModule';
 
 export default function DailyDetail() {
@@ -27,9 +26,8 @@ export default function DailyDetail() {
   };
 
   return (
-    <div className="w-full h-screen bg-[#F8F9FA] flex flex-col font-sans text-slate-900 overflow-hidden">
+    <div className="w-full h-full bg-[#F8F9FA] flex flex-col font-sans text-slate-900 overflow-hidden">
       <div className="bg-white shrink-0">
-        <StatusBar color="black" floating={false} />
         <div className="flex items-center px-3 pb-2 pt-2 shadow-sm border-b border-slate-100">
           <button onClick={() => navigate('/')} className="p-2 -ml-2 text-slate-700 active:bg-slate-100 rounded-full transition-colors absolute">
             <ChevronLeft size={22} />

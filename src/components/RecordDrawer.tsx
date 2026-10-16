@@ -1,9 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Search, Tag, Target, Loader2, Image as ImageIcon, CheckCircle2 } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { useNavigate } from 'react-router-dom';
 
 interface RecordDrawerProps {
   isOpen: boolean;
@@ -15,7 +13,6 @@ interface RecordDrawerProps {
 }
 
 export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onUploadSuccess, defaultTab = 'manual' }: RecordDrawerProps) {
-  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'manual' | 'ocr'>(defaultTab);
   const [isUploading, setIsUploading] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
@@ -252,5 +249,5 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onU
     </AnimatePresence>
   );
 
-  return createPortal(drawerContent, document.body);
+  return drawerContent;
 }

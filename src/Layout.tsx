@@ -87,7 +87,7 @@ export default function Layout() {
               </div>
             )}
 
-            <HomeIndicator />
+            {isMainTab && <HomeIndicator />}
           </div>
         </div>
       </div>
