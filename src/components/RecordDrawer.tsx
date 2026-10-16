@@ -14,7 +14,7 @@ interface RecordDrawerProps {
   defaultTab?: 'manual' | 'ocr';
 }
 
-export default function RecordDrawer({ isOpen, onClose, initialData, onSave, defaultTab = 'manual' }: RecordDrawerProps) {
+export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onUploadSuccess, defaultTab = 'manual' }: RecordDrawerProps) {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'manual' | 'ocr'>(defaultTab);
   const [isUploading, setIsUploading] = useState(false);

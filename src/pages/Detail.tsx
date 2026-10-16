@@ -32,7 +32,28 @@ const SellMarker = (props: any) => {
   )
 }
 
-const tradeData = {
+type TimelineItem = {
+  id: string;
+  type: string;
+  action?: string;
+  date: string;
+  price?: number;
+  qty?: number;
+  amount?: string;
+  fees?: string;
+  text?: string;
+  closeVsFill?: string;
+  closeVsFillColor?: string;
+  motive?: { posTag: string; tags: string[]; desc: string };
+  plan?: { tp: string; sl: string; desc: string };
+};
+
+type TradeDetail = {
+  timeline: TimelineItem[];
+  [key: string]: any;
+};
+
+const tradeData: Record<string, TradeDetail> = {
   '1': {
     id: '1', symbol: 'ZIJIN MINING', code: '601899', market: 'A-Share', direction: 'Sell', status: 'Closed',
     statusColor: 'text-slate-500', statusBadgeColor: 'bg-slate-100 text-slate-600',

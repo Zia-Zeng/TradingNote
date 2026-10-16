@@ -183,7 +183,7 @@ export default function Agent() {
             </div>
             {!showDetail && (
               <button 
-                onClick={() => setSearchParams({ tab: 'backtest', bt_step: '3', strategy: strat, ticker: tick, task_detail: '1' })}
+                onClick={() => setSearchParams({ tab: 'backtest', bt_step: '3', strategy: strat || undefined, ticker: tick || undefined, task_detail: '1' })}
                 className="w-full bg-white border border-slate-200 text-[#0B2545] py-2 rounded-lg text-[11px] font-bold active:bg-slate-50 shadow-sm"
               >
                 View Full Chart

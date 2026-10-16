@@ -32,7 +32,7 @@ export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
   const [trades, setTrades] = useState(INITIAL_TRADES);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingTrade, setEditingTrade] = useState<any>(null);
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
     const action = searchParams.get('trade_action');
