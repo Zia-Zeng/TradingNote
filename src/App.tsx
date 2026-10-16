@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './Layout';
 import Home from './pages/Home';
 import Report from './pages/Report';
@@ -10,8 +10,10 @@ import DailyDetail from './pages/DailyDetail';
 import Notes from './pages/Notes';
 
 export default function App() {
+  const Router = import.meta.env.BASE_URL === '/' ? BrowserRouter : HashRouter;
+
   return (
-    <BrowserRouter>
+    <Router>
       <Routes>
         <Route element={<Layout />}>
           <Route path="/" element={<Home />} />
@@ -24,6 +26,6 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
-    </BrowserRouter>
+    </Router>
   );
 }

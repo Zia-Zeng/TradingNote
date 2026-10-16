@@ -11,7 +11,7 @@ npm ci
 npm run dev
 ```
 
-Open the URL printed by Vite. The default view shows an iPhone-style frame. Add `?view=plain` to see the full-screen version.
+Open the URL printed by Vite to view the latest local prototype.
 
 ## Publish with GitHub Pages
 
@@ -19,6 +19,6 @@ Open the URL printed by Vite. The default view shows an iPhone-style frame. Add 
 npm run build:pages
 ```
 
-Commit the generated `docs/` folder and configure GitHub Pages to deploy from the `main` branch and `/docs` folder. The published demo uses hash-based routes so links to individual screens work on GitHub Pages.
+The repository deploys the current `main` branch through GitHub Actions. Each push builds the demo and publishes it to GitHub Pages.
 
 The site is a static prototype and does not connect to a brokerage or trading API.
