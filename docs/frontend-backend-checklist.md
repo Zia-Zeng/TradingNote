@@ -32,6 +32,14 @@
 
 ## 前端待办
 
+### 核心纵向切片：录入交易 → AI Tracking
+
+现状：`RecordDrawer` 手动录入仍只更新 `TradesModule` 的前端 state；OCR 标签目前是模拟延时，没有真实图片上传/识别；`Detail.tsx` 使用静态交易样例，时间线写入 local storage；AI Tracking 的 Generate 目前只是切换 mock 文案。后端已有 SQLite 交易 CRUD、Tracking 分析和 A 股历史日线接口。
+
+建议先打通**手动录入**的端到端链路，把 OCR 图片解析放到后续阶段：手动录入（含 Motive/Plan/Notes）→ 保存交易 → 详情页读取同一笔数据 → `POST /api/tracking/analyze` → DeepSeek 分析 + 可用时附行情来源/日期 → 页面展示并保存 Tracking 结果。
+
+接交易持久化前要明确数据桥接：`/api/trades` 是单条 Buy/Sell 成交卡片，而 Tracking 要求一笔交易的聚合详情和 `timeline`。首个 MVP 需要由前端明确构造 Tracking 详情对象（或后续扩充后端持久化模型）；不要把单笔卖出成交误当作完整持仓盈亏。
+
 下列事项属于“后端已提供接口，等待前端接入/产品确认”，建议李先和曾确认页面改动时机，避免同时编辑同一文件：
 
 1. **Tracking 接入（优先）**：`Detail.tsx` 调 `POST /api/tracking/analyze`，传 `trade_context`，用 `analysis` 渲染结果；展示加载、失败重试、无行情状态，以及行情来源/日期/日线属性。
@@ -39,7 +47,7 @@
 3. **Agent 交易上下文**：聊天请求除 `trade_id`、页面 `reference`、`symbol`、展示用 `pnl` 外，尽量附上完整交易记录。Agent 的 `trade_context` 使用交易卡片形状（`type`、`price`、`qty`、`motive`、`plan.tp/sl/desc`），与 Tracking 的详情形状（`direction`、`shares`、`buyPrice/currentPrice`、`plan.target/stopLoss/desc`、`timeline`）不同，不能把 Tracking 对象原样传给 Agent。
 4. **Agent 历史**：History 页面接 `GET /api/agent/conversations` 和 `GET /api/agent/conversations/{conversation_id}`，实现列表、选择和恢复。
 5. **真实证券代码**：录入表单需把证券代码单独存入 `code`；目前新增交易将 `code` 写成 `000000`，后端会将它视为空，因此不能据此拉取 A 股历史行情。建议 `symbol` 继续作为展示名称/代码，另加可选的 A 股 6 位 `code` 输入；不猜测代码，非 A 股可留空。
-6. **API 地址与跨域**：统一从 `VITE_API_BASE_URL` 读取后端地址；本机以 `http://127.0.0.1:8000` 为默认值。当前浏览器实际在 `127.0.0.1:5175`，后端 CORS 配置目前只列了 5173，需要李补上当前前端来源或改成可配置来源。手机/部署访问时也不能继续用访问者本机的 `127.0.0.1`。
+6. **API 地址与跨域**：统一从 `VITE_API_BASE_URL` 读取后端地址；本机以 `http://127.0.0.1:8000` 为默认值。后端已允许本地 Vite 的 `517x` 端口；部署前端需在后端 `FRONTEND_ORIGINS` 中配置正式来源。手机访问时不能继续用访问者本机的 `127.0.0.1`。
 
 - 自定义 tag 已在 `zjj_version` 前端实现，后端接受 `motive.tags: string[]`，此项完成。
 - 可以交给 Qoder 的机械性工作：在曾确认不同时编辑 `Detail.tsx` 后，按现有请求/响应字段接入 Tracking API，并补齐加载、错误重试和行情来源提示。涉及字段语义或 UI 取舍的部分先由李、曾确认。
