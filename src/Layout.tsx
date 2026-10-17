@@ -29,7 +29,7 @@ export default function Layout() {
     if (mainEl) {
       mainEl.scrollTo({ top: 0, behavior: 'smooth' });
     }
-  }, [location.pathname, location.search]);
+  }, [location.pathname]);
 
   React.useEffect(() => {
     const updateScale = () => setPhoneScale(getPhoneScale());
@@ -53,6 +53,9 @@ export default function Layout() {
             <main id="main-scroll-container" className="flex-1 min-h-0 w-full overflow-y-auto no-scrollbar">
               <Outlet />
             </main>
+
+            {/* Page-level overlays remain inside the phone preview, above routed content. */}
+            <div id="app-modal-root" className="absolute inset-0 z-[100] pointer-events-none" />
 
             {/* Bottom Navigation for Main Tabs */}
             {isMainTab && (

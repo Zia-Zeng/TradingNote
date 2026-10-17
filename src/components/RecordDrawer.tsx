@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Search, Tag, Target, Loader2, Image as ImageIcon, CheckCircle2 } from 'lucide-react';
+import { X, Search, Tag, Target, Loader2, Image as ImageIcon, CheckCircle2, Plus, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 interface RecordDrawerProps {
@@ -13,17 +14,27 @@ interface RecordDrawerProps {
 }
 
 export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onUploadSuccess, defaultTab = 'manual' }: RecordDrawerProps) {
+  const buyMotiveOptions = ['Breakout Confirmation', 'Pullback Entry', 'Support Bounce', 'Trend Continuation', 'Catalyst', 'Re-entry'];
+  const sellMotiveOptions = ['Take Profit', 'Stop Loss', 'Resistance Rejection', 'Trend Reversal', 'Risk Reduction', 'Thesis Invalidated'];
+  const [isAddingTag, setIsAddingTag] = useState(false);
+  const [isDeletingTags, setIsDeletingTags] = useState(false);
+  const [deletedMotiveOptions, setDeletedMotiveOptions] = useState<Record<'Buy' | 'Sell', string[]>>(() => {
+    try { return JSON.parse(localStorage.getItem('tradingnote:deleted-motive-options') || '{"Buy":[],"Sell":[]}'); }
+    catch { return { Buy: [], Sell: [] }; }
+  });
   const [activeTab, setActiveTab] = useState<'manual' | 'ocr'>(defaultTab);
   const [isUploading, setIsUploading] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
 
   // Form state
   const [symbol, setSymbol] = useState('');
-  const [direction, setDirection] = useState('Buy');
+  const [direction, setDirection] = useState<'Buy' | 'Sell'>('Buy');
   const [price, setPrice] = useState('');
   const [qty, setQty] = useState('');
   const [posTag, setPosTag] = useState('Close');
   const [tags, setTags] = useState<string[]>(['Stop Loss', 'Take Profit', 'Trend']);
+  const [customTags, setCustomTags] = useState<string[]>([]);
+  const [newTag, setNewTag] = useState('');
   const [planDesc, setPlanDesc] = useState('');
   const [motiveDesc, setMotiveDesc] = useState('');
   const [tp, setTp] = useState('');
@@ -32,18 +43,21 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onU
   useEffect(() => {
     if (initialData) {
       setSymbol(initialData.symbol || '');
-      setDirection(initialData.type || 'Buy');
+      setDirection(initialData.type === 'Sell' ? 'Sell' : 'Buy');
       setPrice(initialData.price || '');
       setQty(initialData.qty || '');
       setPosTag(initialData.motive?.posTag || 'Close');
       setTags(initialData.motive?.tags || []);
+      const standardOptions = initialData.type === 'Buy' ? buyMotiveOptions : sellMotiveOptions;
+      setCustomTags((initialData.motive?.tags || []).filter((tag: string) => !standardOptions.includes(tag)));
+      setNewTag('');
       setTp(initialData.plan?.tp || '');
       setSl(initialData.plan?.sl || '');
       setPlanDesc(initialData.plan?.desc || '');
       setMotiveDesc(initialData.motive?.desc || '');
       setActiveTab('manual');
     } else {
-      setSymbol(''); setPrice(''); setQty(''); setTags(['Stop Loss', 'Take Profit', 'Trend']); 
+      setSymbol(''); setPrice(''); setQty(''); setTags([]); setCustomTags([]); setNewTag('');
       setTp(''); setSl(''); setPlanDesc(''); setMotiveDesc(''); setPosTag('Close'); setDirection('Buy');
       setActiveTab(defaultTab);
     }
@@ -52,6 +66,34 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onU
   const toggleTag = (tag: string) => {
     if (tags.includes(tag)) setTags(tags.filter(t => t !== tag));
     else setTags([...tags, tag]);
+  };
+
+  const addCustomTag = () => {
+    const tag = newTag.trim();
+    if (!tag) return;
+    if (!tags.includes(tag)) setTags(current => [...current, tag]);
+    if (!(direction === 'Buy' ? buyMotiveOptions : sellMotiveOptions).includes(tag) && !customTags.includes(tag)) {
+      setCustomTags(current => [...current, tag]);
+    }
+    setNewTag('');
+    setIsAddingTag(false);
+  };
+
+  const removeTag = (tag: string) => {
+    setTags(current => current.filter(item => item !== tag));
+    if (customTags.includes(tag)) {
+      setCustomTags(current => current.filter(item => item !== tag));
+      return;
+    }
+    const next = { ...deletedMotiveOptions, [direction]: [...deletedMotiveOptions[direction], tag] };
+    setDeletedMotiveOptions(next);
+    localStorage.setItem('tradingnote:deleted-motive-options', JSON.stringify(next));
+  };
+
+  const changeDirection = (nextDirection: 'Buy' | 'Sell') => {
+    if (direction === nextDirection) return;
+    setDirection(nextDirection);
+    setTags([]);
   };
 
   const handleSave = () => {
@@ -89,13 +131,13 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onU
             key="backdrop"
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             onClick={onClose}
-            className="fixed inset-0 bg-[#0B2545]/40 z-[9998] backdrop-blur-sm"
+            className="absolute inset-0 bg-[#0B2545]/40 z-[1] backdrop-blur-sm pointer-events-auto"
           />
           <motion.div
             key="drawer"
             initial={{ y: '100%' }} animate={{ y: 0 }} exit={{ y: '100%' }}
             transition={{ type: 'spring', damping: 28, stiffness: 220 }}
-            className="fixed bottom-0 left-0 right-0 h-[85vh] bg-[#F8F9FA] rounded-t-2xl z-[9999] flex flex-col shadow-[0_-10px_40px_rgba(0,0,0,0.1)] overflow-hidden"
+            className="absolute bottom-0 left-0 right-0 h-[85%] bg-[#F8F9FA] rounded-t-2xl z-[2] flex flex-col shadow-[0_-10px_40px_rgba(0,0,0,0.1)] overflow-hidden pointer-events-auto"
           >
             <div className="px-3 py-3 flex justify-between items-center bg-white z-10 shadow-sm border-b border-slate-100">
               <div className="font-bold text-[15px] text-[#0B2545] flex items-center gap-2">
@@ -141,8 +183,8 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onU
                       />
                     </div>
                     <div className="flex items-center gap-2 mb-3">
-                      <button onClick={() => setDirection('Buy')} className={cn("flex-1 py-1.5 rounded-lg text-[11px] font-bold border transition-colors", direction === 'Buy' ? "bg-blue-50 text-blue-600 border-blue-200" : "bg-white text-slate-400 border-slate-200")}>Buy</button>
-                      <button onClick={() => setDirection('Sell')} className={cn("flex-1 py-1.5 rounded-lg text-[11px] font-bold border transition-colors", direction === 'Sell' ? "bg-rose-50 text-rose-500 border-rose-200" : "bg-white text-slate-400 border-slate-200")}>Sell</button>
+                      <button onClick={() => changeDirection('Buy')} className={cn("flex-1 py-1.5 rounded-lg text-[11px] font-bold border-2 transition-colors", direction === 'Buy' ? "bg-emerald-50 text-emerald-700 border-emerald-400" : "bg-white text-slate-400 border-slate-200")}>Buy</button>
+                      <button onClick={() => changeDirection('Sell')} className={cn("flex-1 py-1.5 rounded-lg text-[11px] font-bold border-2 transition-colors", direction === 'Sell' ? "bg-rose-50 text-rose-600 border-rose-400" : "bg-white text-slate-400 border-slate-200")}>Sell</button>
                     </div>
                     <div className="flex gap-3 text-[12px] bg-slate-50 p-2.5 rounded-lg border border-slate-100">
                       <div className="flex flex-col flex-1">
@@ -160,16 +202,40 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onU
                   {/* Motive */}
                   <div>
                     <div className="text-[14px] font-bold text-[#0B2545] mb-2 flex items-center gap-1.5"><Tag size={14} className="text-[#EE6C4D]" /> Motive</div>
-                    <div className="text-[10px] text-slate-500 mb-1.5 font-bold uppercase tracking-wider">Tags (Multi)</div>
-                    <div className="flex flex-wrap gap-1.5 mb-2.5">
-                      {['Stop Loss', 'Take Profit', 'Trend', 'Support Break', 'No Logic', 'Error Fix', 'Market Dip'].map(tag => (
-                        <button 
-                          key={tag} onClick={() => toggleTag(tag)}
-                          className={cn("px-2.5 py-1 rounded-md text-[11px] transition-all font-bold border", tags.includes(tag) ? "bg-[#EE6C4D]/10 text-[#EE6C4D] border-[#EE6C4D]/30" : "bg-white text-slate-600 border-slate-200")}
+                    <div className="text-[10px] text-slate-500 mb-1.5 font-bold uppercase tracking-wider">{direction} motives (select multiple)</div>
+                    <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
+                      {[...(direction === 'Buy' ? buyMotiveOptions : sellMotiveOptions).filter(tag => !deletedMotiveOptions[direction].includes(tag)), ...customTags].map(tag => (
+                        <button
+                          key={tag}
+                          onClick={() => isDeletingTags ? removeTag(tag) : toggleTag(tag)}
+                          className={cn("inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] transition-all font-bold border", isDeletingTags ? "bg-rose-50 text-rose-700 border-rose-300" : tags.includes(tag) ? (direction === 'Buy' ? "bg-emerald-50 text-emerald-700 border-emerald-400" : "bg-rose-50 text-rose-600 border-rose-400") : "bg-white text-slate-600 border-slate-200")}
                         >
-                          {tag}
+                          {tag}{isDeletingTags && <Trash2 size={10} />}
                         </button>
                       ))}
+                      <button
+                        onClick={() => { setIsAddingTag(value => !value); setIsDeletingTags(false); }}
+                        aria-label="Add motive tag"
+                        className="w-7 h-7 inline-flex items-center justify-center rounded-full border border-slate-300 bg-white text-slate-600 hover:border-[#EE6C4D] hover:text-[#EE6C4D]"
+                      ><Plus size={14} /></button>
+                      {isAddingTag && (
+                        <input
+                          autoFocus
+                          value={newTag}
+                          onChange={event => setNewTag(event.target.value)}
+                          onKeyDown={event => {
+                            if (event.key === 'Enter') { event.preventDefault(); addCustomTag(); }
+                            if (event.key === 'Escape') { setIsAddingTag(false); setNewTag(''); }
+                          }}
+                          placeholder="New motive tag"
+                          className="w-36 bg-white border border-[#EE6C4D]/50 rounded-full px-3 py-1.5 text-[11px] focus:outline-none focus:border-[#EE6C4D]"
+                        />
+                      )}
+                      <button
+                        onClick={() => { setIsDeletingTags(value => !value); setIsAddingTag(false); }}
+                        aria-label={isDeletingTags ? 'Finish deleting tags' : 'Delete motive tags'}
+                        className={cn("w-7 h-7 inline-flex items-center justify-center rounded-full border transition-colors", isDeletingTags ? "border-rose-300 bg-rose-50 text-rose-600" : "border-slate-300 bg-white text-slate-500 hover:border-rose-300 hover:text-rose-600")}
+                      ><Trash2 size={13} /></button>
                     </div>
                     <textarea 
                       value={motiveDesc} onChange={e => setMotiveDesc(e.target.value)}
@@ -249,5 +315,7 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onU
     </AnimatePresence>
   );
 
-  return drawerContent;
+  // Avoid card-level backdrop filters while keeping overlays inside the phone shell.
+  const modalRoot = document.getElementById('app-modal-root');
+  return modalRoot ? createPortal(drawerContent, modalRoot) : drawerContent;
 }

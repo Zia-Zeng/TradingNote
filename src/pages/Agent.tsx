@@ -11,6 +11,7 @@ import {
   ComposedChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Scatter 
 } from 'recharts';
 import { motion, AnimatePresence } from 'framer-motion';
+import { readLocalResult, saveLocalResult } from '../lib/saved-results';
 
 interface Message {
   id: string;
@@ -77,9 +78,9 @@ const SellMarker = (props: any) => {
   if (!payload || payload.sellPrice === undefined) return null;
   return (
     <g transform={`translate(${cx},${cy})`}>
-      <rect x={-8} y={8} width={16} height={12} fill="#f97316" rx={2} />
+      <rect x={-8} y={8} width={16} height={12} fill="#ef4444" rx={2} />
       <text x={0} y={14} fill="white" fontSize={8} textAnchor="middle" dominantBaseline="central" fontWeight="bold">S</text>
-      <path d="M -3 8 L 0 5 L 3 8 Z" fill="#f97316" />
+      <path d="M -3 8 L 0 5 L 3 8 Z" fill="#ef4444" />
     </g>
   )
 }
@@ -98,9 +99,17 @@ export default function Agent() {
   const action = searchParams.get('action');
   const step = searchParams.get('step');
   const tab = searchParams.get('tab') || 'chat';
+  const reference = searchParams.get('ref');
+  const isAssetReference = Boolean(reference?.startsWith('detail-'));
+  const draftAsset = searchParams.get('asset') || 'ZIJIN MINING';
   
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
+  const [savedTracking, setSavedTracking] = useState(false);
+  const [savedPlan, setSavedPlan] = useState(false);
+  const [savedReview, setSavedReview] = useState(false);
+  const [savedTask, setSavedTask] = useState(false);
+  const [savedTasks, setSavedTasks] = useState<any[]>(() => readLocalResult<any[]>('tradingnote:backtest-tasks') || []);
   
   const navigate = useNavigate();
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -168,9 +177,12 @@ export default function Agent() {
 
       if (btStep === '3' || showDetail) {
         const stats = STATS[strat as keyof typeof STATS] || STATS.sma;
+        const taskKey = `${strat || 'sma'}-${tick || 'AAPL'}`;
+        const existingTasks = readLocalResult<any[]>('tradingnote:backtest-tasks') || [];
+        setSavedTask(existingTasks.some(task => task.id === taskKey));
         const resultMsg = (
           <div className="w-[240px] max-w-full">
-            <p className="mb-2 text-[12px] leading-relaxed">Backtest completed successfully! Task added to your tasks list.</p>
+            <p className="mb-2 text-[12px] leading-relaxed">Backtest completed successfully. Save it to your tasks to keep the result.</p>
             <div className="grid grid-cols-2 gap-2 mb-2">
               <div className="bg-emerald-50 border border-emerald-100 p-2.5 rounded-lg shadow-sm">
                 <div className="text-[9px] text-emerald-600 font-bold uppercase tracking-wider mb-0.5">Win Rate</div>
@@ -181,6 +193,16 @@ export default function Agent() {
                 <div className="text-[14px] font-bold font-mono text-emerald-700">{stats.return}</div>
               </div>
             </div>
+            <button
+              onClick={() => {
+                const tasks = readLocalResult<any[]>('tradingnote:backtest-tasks') || [];
+                const nextTasks = [{ id: taskKey, strategy: STRATEGIES.find(s => s.id === strat)?.name || 'SMA Crossover', ticker: tick || 'AAPL', stats, savedAt: new Date().toISOString() }, ...tasks.filter(task => task.id !== taskKey)];
+                saveLocalResult('tradingnote:backtest-tasks', nextTasks);
+                setSavedTasks(nextTasks);
+                setSavedTask(true);
+              }}
+              className="w-full mb-2 bg-emerald-50 border border-emerald-200 text-emerald-800 py-2 rounded-lg text-[11px] font-bold active:bg-emerald-100"
+            >{savedTask ? 'Saved to Tasks' : 'Save to Tasks'}</button>
             {!showDetail && (
               <button 
                 onClick={() => {
@@ -227,7 +249,7 @@ export default function Agent() {
               </ResponsiveContainer>
             </div>
             <p className="text-[10px] text-slate-500 mt-2.5 bg-slate-50 p-2 rounded-md border border-slate-100 font-medium leading-relaxed">
-              Green <strong className="text-[#10b981]">B</strong> marks Buy, Orange <strong className="text-[#f97316]">S</strong> marks Sell. You can ask me to adjust the parameters or test another ticker.
+              Green <strong className="text-[#10b981]">B</strong> marks Buy, red <strong className="text-[#ef4444]">S</strong> marks Sell. You can ask me to adjust the parameters or test another ticker.
             </p>
           </div>
         );
@@ -324,7 +346,7 @@ export default function Agent() {
         if (!step) {
           msgs.push({ id: 'd1_a', role: 'agent', content: <Thinking /> });
           setMessages(msgs);
-          const t = setTimeout(() => setSearchParams({ action: 'draft', step: '1', tab: 'chat' }, { replace: true }), 1500);
+          const t = setTimeout(() => setSearchParams({ action: 'draft', step: '1', tab: 'chat', asset: draftAsset }, { replace: true }), 1500);
           return () => clearTimeout(t);
         }
 
@@ -332,8 +354,8 @@ export default function Agent() {
           <div>
             <p className="mb-2 text-[12px] leading-relaxed">I can help you build a solid trading plan. <strong>Which asset</strong> would you like to focus on?</p>
             <div className="flex flex-wrap gap-2">
-              <button onClick={() => setSearchParams({ action: 'draft', step: '2_think', tab: 'chat' })} className="px-2.5 py-1.5 bg-[#EE6C4D]/10 text-[#EE6C4D] border border-[#EE6C4D]/20 rounded-lg text-[11px] font-bold active:bg-[#EE6C4D]/20 transition-colors shadow-sm">ZIJIN MINING</button>
-              <button onClick={() => setSearchParams({ action: 'draft', step: '2_think', tab: 'chat' })} className="px-2.5 py-1.5 bg-white text-slate-600 border border-slate-200 rounded-lg text-[11px] font-bold active:bg-slate-50 transition-colors shadow-sm">BIG DATA ETF</button>
+              <button onClick={() => setSearchParams({ action: 'draft', step: '2_think', tab: 'chat', asset: 'ZIJIN MINING' })} className="px-2.5 py-1.5 bg-[#EE6C4D]/10 text-[#EE6C4D] border border-[#EE6C4D]/20 rounded-lg text-[11px] font-bold active:bg-[#EE6C4D]/20 transition-colors shadow-sm">ZIJIN MINING</button>
+              <button onClick={() => setSearchParams({ action: 'draft', step: '2_think', tab: 'chat', asset: 'BIG DATA ETF' })} className="px-2.5 py-1.5 bg-white text-slate-600 border border-slate-200 rounded-lg text-[11px] font-bold active:bg-slate-50 transition-colors shadow-sm">BIG DATA ETF</button>
             </div>
           </div>
         );
@@ -354,12 +376,12 @@ export default function Agent() {
         }
 
         msgs.push({ id: 'd1_a', role: 'agent', content: step1AgentDisabled });
-        msgs.push({ id: 'd2_u', role: 'user', content: 'ZIJIN MINING' });
+        msgs.push({ id: 'd2_u', role: 'user', content: draftAsset });
 
         if (step === '2_think') {
           msgs.push({ id: 'd2_a', role: 'agent', content: <Thinking /> });
           setMessages(msgs);
-          const t = setTimeout(() => setSearchParams({ action: 'draft', step: '2', tab: 'chat' }, { replace: true }), 1500);
+          const t = setTimeout(() => setSearchParams({ action: 'draft', step: '2', tab: 'chat', asset: draftAsset }, { replace: true }), 1500);
           return () => clearTimeout(t);
         }
 
@@ -370,12 +392,12 @@ export default function Agent() {
                 <Sparkles size={12} className="text-[#0B2545]" />
                 <span className="text-[10px] font-bold text-[#0B2545] uppercase tracking-wider">Analysis</span>
               </div>
-              <p className="text-[11px] text-slate-600 leading-relaxed font-medium">ZIJIN MINING is currently in a consolidation phase near the 20-day MA. Metals sector shows steady inflow.</p>
+              <p className="text-[11px] text-slate-600 leading-relaxed font-medium">{draftAsset} is consolidating near support, with sector flows remaining steady.</p>
             </div>
             <p className="mb-2 text-[12px] leading-relaxed">To tailor the plan, what is your <strong>preferred holding period</strong>?</p>
             <div className="flex flex-wrap gap-2">
-              <button onClick={() => setSearchParams({ action: 'draft', step: '3_think', tab: 'chat' })} className="px-2.5 py-1.5 bg-[#EE6C4D]/10 text-[#EE6C4D] border border-[#EE6C4D]/20 rounded-lg text-[11px] font-bold active:bg-[#EE6C4D]/20 transition-colors shadow-sm">Short-term Swing</button>
-              <button onClick={() => setSearchParams({ action: 'draft', step: '3_think', tab: 'chat' })} className="px-2.5 py-1.5 bg-white text-slate-600 border border-slate-200 rounded-lg text-[11px] font-bold active:bg-slate-50 transition-colors shadow-sm">Medium-term Trend</button>
+              <button onClick={() => setSearchParams({ action: 'draft', step: '3_think', tab: 'chat', asset: draftAsset })} className="px-2.5 py-1.5 bg-[#EE6C4D]/10 text-[#EE6C4D] border border-[#EE6C4D]/20 rounded-lg text-[11px] font-bold active:bg-[#EE6C4D]/20 transition-colors shadow-sm">Short-term Swing</button>
+              <button onClick={() => setSearchParams({ action: 'draft', step: '3_think', tab: 'chat', asset: draftAsset })} className="px-2.5 py-1.5 bg-white text-slate-600 border border-slate-200 rounded-lg text-[11px] font-bold active:bg-slate-50 transition-colors shadow-sm">Medium-term Trend</button>
             </div>
           </div>
         );
@@ -408,30 +430,34 @@ export default function Agent() {
         if (step === '3_think') {
           msgs.push({ id: 'd3_a', role: 'agent', content: <Thinking /> });
           setMessages(msgs);
-          const t = setTimeout(() => setSearchParams({ action: 'draft', step: '3', tab: 'chat' }, { replace: true }), 2000);
+          const t = setTimeout(() => setSearchParams({ action: 'draft', step: '3', tab: 'chat', asset: draftAsset }, { replace: true }), 2000);
           return () => clearTimeout(t);
         }
 
+        const planTarget = draftAsset === 'BIG DATA ETF' ? { detailId: '4', tradeId: '1' } : { detailId: '1', tradeId: '2' };
+        const timelineStorageKey = `tradingnote:timeline:${planTarget.detailId}`;
+        const storedPlanRecord = (readLocalResult<any[]>(timelineStorageKey) || []).find(record => record.id === planTarget.tradeId);
+        setSavedPlan(Boolean(storedPlanRecord?.aiPlan) || Boolean(readLocalResult(`tradingnote:plan:${draftAsset}`)));
         const step3AgentActive = (
           <div className="w-[240px] max-w-full">
-            <p className="mb-3 text-[12px] leading-relaxed">Here is your customized <strong>Trading Discipline Plan</strong> for <span className="text-[#0B2545] font-bold">ZIJIN MINING</span>:</p>
+            <p className="mb-3 text-[12px] leading-relaxed">Here is your customized <strong>Trading Discipline Plan</strong> for <span className="text-[#0B2545] font-bold">{draftAsset}</span>:</p>
             
             <div className="space-y-2.5">
               <div className="bg-white/80 backdrop-blur-md p-3 rounded-xl border border-white shadow-[0_4px_12px_rgba(11,37,69,0.04)]">
                 <div className="text-[9px] text-slate-500 font-bold mb-1 uppercase tracking-wider">Entry Zone</div>
-                <div className="text-[14px] font-bold text-[#0B2545] font-mono mb-1">25.80 - 26.00</div>
+                <div className="text-[14px] font-bold text-[#0B2545] font-mono mb-1">{draftAsset === 'ZIJIN MINING' ? '25.80 - 26.00' : '0.98 - 1.00'}</div>
                 <p className="text-[11px] text-slate-600 font-medium leading-relaxed">Wait for a pullback to the 5-day MA. Do not chase if it opens above 26.50.</p>
               </div>
               
               <div className="flex gap-2.5">
                 <div className="flex-1 bg-rose-50/80 backdrop-blur-md p-3 rounded-xl border border-rose-100 shadow-[0_4px_12px_rgba(244,63,94,0.06)]">
                   <div className="text-[9px] text-rose-500 font-bold mb-1 uppercase tracking-wider">Hard Stop</div>
-                  <div className="text-[14px] font-bold text-rose-700 font-mono mb-1">24.80</div>
+                  <div className="text-[14px] font-bold text-rose-700 font-mono mb-1">{draftAsset === 'ZIJIN MINING' ? '24.80' : '0.92'}</div>
                   <p className="text-[10px] text-rose-700/80 font-medium leading-tight">Close immediately on daily close below 24.80.</p>
                 </div>
                 <div className="flex-1 bg-emerald-50/80 backdrop-blur-md p-3 rounded-xl border border-emerald-100 shadow-[0_4px_12px_rgba(16,185,129,0.06)]">
                   <div className="text-[9px] text-emerald-600 font-bold mb-1 uppercase tracking-wider">Target</div>
-                  <div className="text-[14px] font-bold text-emerald-700 font-mono mb-1">27.50</div>
+                  <div className="text-[14px] font-bold text-emerald-700 font-mono mb-1">{draftAsset === 'ZIJIN MINING' ? '27.50' : '1.15'}</div>
                   <p className="text-[10px] text-emerald-700/80 font-medium leading-tight">Take 50% profit at target, trail the rest.</p>
                 </div>
               </div>
@@ -447,6 +473,18 @@ export default function Agent() {
                 </p>
               </div>
             </div>
+            <button
+              onClick={() => {
+                const plan = { asset: draftAsset, entryZone: draftAsset === 'ZIJIN MINING' ? '25.80 - 26.00' : '0.98 - 1.00', stopLoss: draftAsset === 'ZIJIN MINING' ? '24.80' : '0.92', target: draftAsset === 'ZIJIN MINING' ? '27.50' : '1.15', rule: 'Set a conditional stop-loss at entry and avoid reacting to intraday noise.', savedAt: new Date().toISOString() };
+                const key = `tradingnote:timeline:${planTarget.detailId}`;
+                const records = readLocalResult<any[]>(key) || [];
+                const currentRecord = records.find(record => record.id === planTarget.tradeId) || { id: planTarget.tradeId, type: 'Trade' };
+                const updatedRecord = { ...currentRecord, aiPlan: plan, plan: { ...(currentRecord.plan || {}), tp: plan.target, sl: plan.stopLoss, desc: plan.rule } };
+                saveLocalResult(key, [...records.filter(record => record.id !== planTarget.tradeId), updatedRecord]);
+                setSavedPlan(true);
+              }}
+              className="w-full mt-3 bg-[#0B2545] text-white py-2 rounded-lg text-[11px] font-bold active:bg-[#134074]"
+            >{savedPlan ? 'Plan Saved to Trade' : 'Save Plan to Latest Trade'}</button>
           </div>
         );
 
@@ -500,6 +538,7 @@ export default function Agent() {
           return () => clearTimeout(t);
         }
 
+        setSavedReview(Boolean(readLocalResult('tradingnote:review:2026-07-14:JEREH')));
         const step2AgentActive = (
           <div className="w-[250px] max-w-full">
             <p className="mb-3 text-[12px] leading-relaxed">Here is the detailed review for <span className="text-[#0B2545] font-bold">JEREH</span>:</p>
@@ -547,6 +586,13 @@ export default function Agent() {
                 </ul>
               </div>
             </div>
+            <button
+              onClick={() => {
+                saveLocalResult('tradingnote:review:2026-07-14:JEREH', { date: '2026-07-14', asset: 'JEREH', summary: 'The exit was right, but waiting below the ¥145 stop added about ¥500 in losses. Use conditional orders to preserve capital.', savedAt: new Date().toISOString() });
+                setSavedReview(true);
+              }}
+              className="w-full mt-3 bg-[#0B2545] text-white py-2 rounded-lg text-[11px] font-bold active:bg-[#134074]"
+            >{savedReview ? 'Review Saved to Trade' : 'Save Review to Trade'}</button>
           </div>
         );
 
@@ -697,11 +743,14 @@ export default function Agent() {
           msgs.push({ id: 'i1_a', role: 'agent', content: insightsResult });
           setMessages(msgs);
         }
+      } else if (reference === 'daily-2026-07-14' || isAssetReference) {
+        setMessages([]);
+        setInput(searchParams.get('prompt') || (isAssetReference ? 'How did I execute these trades?' : "Review today's trades"));
       } else {
         setMessages([]); // default state / landing for chat
       }
     }
-  }, [tradeId, action, step, tab, searchParams, setSearchParams]);
+  }, [tradeId, action, step, tab, reference, searchParams, setSearchParams]);
 
   useEffect(() => {
     setTimeout(() => {
@@ -714,6 +763,10 @@ export default function Agent() {
     
     const currentInput = input.trim();
     setInput('');
+    const isDailyReview = reference === 'daily-2026-07-14' && currentInput.toLowerCase().includes('review');
+    const isAssetTracking = isAssetReference && currentInput.length > 0;
+    if (isDailyReview) setSavedTracking(Boolean(readLocalResult('tradingnote:tracking:2026-07-14')));
+    if (isAssetTracking) setSavedTracking(Boolean(readLocalResult(`tradingnote:asset-tracking:${tradeId}`)));
 
     if (tab === 'backtest') {
       const btStep = searchParams.get('bt_step');
@@ -741,8 +794,51 @@ export default function Agent() {
           content: (
             <div>
               <p className="text-[12px] leading-relaxed">
-                Got your question: "<span className="italic">{currentInput}</span>". Based on your data, you tend to "exit too early" when in profit. Suggestion: For the next "breakout" trade, try splitting your take-profit into two tranches (50% / 50%) to let profits run.
+                {isAssetTracking ? (
+                  <>
+                    <p className="font-bold text-[#0B2545] mb-1.5">{searchParams.get('symbol') || 'Trade'} Execution Review</p>
+                    <p>P&amp;L: {searchParams.get('pnl') || 'The position result is reflected in the trade record.'} The key question is whether the exit matched the planned risk and target.</p>
+                    <p className="mt-1.5">Process: Review the entry thesis, stop placement, and exit timing together. Lesson: define the invalidation level before entry and use a conditional order to reduce hesitation.</p>
+                  </>
+                ) : isDailyReview ? (
+                  <>
+                    <p className="font-bold text-[#0B2545] mb-1.5">Jul 14 Trade Review</p>
+                    <p>Realized P&amp;L was ¥3,330 (+1.31%). Two of three exits broadly followed the plan. JEREH was sold below its ¥145 stop, adding about ¥500 in avoidable loss.</p>
+                    <p className="mt-1.5">ZIJIN MINING was sold near its ¥27 target, while ZIJIN INTL exited at its ¥94 stop. Next time, place stop orders at entry to reduce hesitation.</p>
+                  </>
+                ) : (
+                  <>Got your question: "<span className="italic">{currentInput}</span>". Based on your data, you tend to "exit too early" when in profit. Suggestion: For the next "breakout" trade, try splitting your take-profit into two tranches (50% / 50%) to let profits run.</>
+                )}
               </p>
+              {isDailyReview && (
+                <button
+                  onClick={() => {
+                    saveLocalResult('tradingnote:tracking:2026-07-14', {
+                      date: '2026-07-14', title: 'M-Agent Daily Review',
+                      body: 'Realized P&L was ¥3,330 (+1.31%). Two of three exits broadly followed the plan. JEREH was sold below its ¥145 stop, adding about ¥500 in avoidable loss. ZIJIN MINING was sold near its ¥27 target, while ZIJIN INTL exited at its ¥94 stop. Next time, place stop orders at entry to reduce hesitation.',
+                      savedAt: new Date().toISOString()
+                    });
+                    setSavedTracking(true);
+                  }}
+                  className="mt-3 w-full bg-[#0B2545] text-white py-2 rounded-lg text-[11px] font-bold active:bg-[#134074]"
+                >{savedTracking ? 'Tracking Saved' : 'Save Tracking'}</button>
+              )}
+              {isAssetTracking && (
+                <button
+                  onClick={() => {
+                    saveLocalResult(`tradingnote:asset-tracking:${tradeId}`, {
+                      asset: searchParams.get('symbol') || 'Trade',
+                      overallSummary: 'The trade outcome should be judged by both its P&L and the quality of execution against the original plan.',
+                      pnlResult: searchParams.get('pnl') || 'See the trade record for realized P&L.',
+                      processResult: 'Review the entry thesis, stop placement, and exit timing together.',
+                      lessonsLearned: 'Define the invalidation level before entry and use a conditional order to reduce hesitation.',
+                      savedAt: new Date().toISOString()
+                    });
+                    setSavedTracking(true);
+                  }}
+                  className="mt-3 w-full bg-[#0B2545] text-white py-2 rounded-lg text-[11px] font-bold active:bg-[#134074]"
+                >{savedTracking ? 'Tracking Saved' : 'Save Tracking'}</button>
+              )}
             </div>
           )
         }
@@ -902,7 +998,7 @@ export default function Agent() {
       {/* Fixed Bottom Area (Chat Input for both flows) */}
       {(tab === 'chat' || tab === 'backtest') && (
         <div className="shrink-0 w-full bg-white/95 backdrop-blur-xl border-t border-slate-100 z-10 px-3 pt-2 pb-[100px] shadow-[0_-4px_20px_rgba(0,0,0,0.02)]">
-          
+
           {/* Quick Actions (Chat only) */}
           {tab === 'chat' && (
             <div className="flex overflow-x-auto no-scrollbar gap-2 mb-2 w-full snap-x">
@@ -934,13 +1030,20 @@ export default function Agent() {
             <div className="p-2 text-slate-400 shrink-0 mb-0.5">
               <Sparkles size={16} />
             </div>
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={tab === 'backtest' && searchParams.get('bt_step') === '1' ? "Type a ticker (e.g. AAPL)..." : "Ask a master what they are buying..."}
-              className="flex-1 max-h-[72px] min-h-[36px] bg-transparent resize-none text-[13px] font-medium text-[#0B2545] p-2 pl-0 focus:outline-none placeholder:text-slate-400"
-              rows={1}
-            />
+            <div className="flex-1 min-w-0 flex items-center gap-1.5">
+              {tab === 'chat' && (reference === 'daily-2026-07-14' || isAssetReference) && (
+                <div className="inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded-md bg-[#EE6C4D]/10 border border-[#EE6C4D]/20 text-[9px] font-bold text-[#0B2545]">
+                  <BookOpen size={10} className="text-[#EE6C4D]" /> {isAssetReference ? `${searchParams.get('symbol') || 'Asset'} · P&L ${searchParams.get('pnl') || '--'}` : 'Jul 14 Reference'}
+                </div>
+              )}
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder={tab === 'backtest' && searchParams.get('bt_step') === '1' ? "Type a ticker (e.g. AAPL)..." : "Ask a master what they are buying..."}
+                className="flex-1 min-w-0 w-full max-h-[72px] min-h-[36px] bg-transparent resize-none text-[13px] font-medium text-[#0B2545] p-2 pl-0 focus:outline-none placeholder:text-slate-400"
+                rows={1}
+              />
+            </div>
             <button 
               onClick={handleSend}
               disabled={!input.trim()}
@@ -974,6 +1077,19 @@ export default function Agent() {
               <h2 className="text-[16px] font-bold text-[#0B2545]">Backtest Tasks</h2>
             </div>
             <div className="p-3 space-y-3 flex-1 overflow-y-auto">
+              {savedTasks.map(task => (
+                <div key={task.id} className="bg-white p-3 rounded-xl border border-emerald-200 shadow-sm">
+                  <div className="flex justify-between items-center mb-2">
+                    <div className="text-[13px] font-bold text-[#0B2545]">{task.strategy}</div>
+                    <div className="text-[9px] bg-emerald-50 border border-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold uppercase">Saved</div>
+                  </div>
+                  <div className="text-[11px] text-slate-500">Target: <span className="font-bold text-[#0B2545] uppercase">{task.ticker}</span></div>
+                  <div className="grid grid-cols-2 gap-2 mt-2 text-[10px] text-slate-500">
+                    <span>Win rate <b className="text-emerald-700">{task.stats.winRate}</b></span>
+                    <span>Return <b className="text-emerald-700">{task.stats.return}</b></span>
+                  </div>
+                </div>
+              ))}
               {searchParams.get('bt_step') === '3' && (
                 <div 
                   onClick={() => setSearchParams({ tab: 'backtest', bt_step: '3', strategy: searchParams.get('strategy') || 'sma', ticker: searchParams.get('ticker') || 'AAPL', task_detail: '1' })}

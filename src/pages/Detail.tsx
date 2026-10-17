@@ -1,21 +1,25 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { 
   ChevronLeft, MoreHorizontal,
-  BotMessageSquare, Target, Zap, Clock,
-  CheckCircle2, XCircle, Info, Sparkles, MessageCircle, Tag, Edit2
+  BotMessageSquare, Target, Zap, Sparkles, MessageCircle, Tag, Edit2
 } from 'lucide-react';
 import { ComposedChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, ReferenceLine, Scatter, Brush } from 'recharts';
 import { cn } from '../lib/utils';
+import { readLocalResult, saveLocalResult, SAVED_RESULTS_EVENT } from '../lib/saved-results';
+import RecordDrawer from '../components/RecordDrawer';
+
+type SavedPlan = { asset: string; entryZone: string; stopLoss: string; target: string; rule: string };
+type SavedAssetTracking = { asset: string; overallSummary: string; pnlResult: string; processResult: string; lessonsLearned: string; savedAt: string };
 
 const BuyMarker = (props: any) => {
   const { cx, cy, payload } = props;
   if (!payload || payload.buyPrice === undefined) return null;
   return (
     <g transform={`translate(${cx},${cy})`}>
-      <rect x={-8} y={-20} width={16} height={12} fill="#3b82f6" rx={2} />
+      <rect x={-8} y={-20} width={16} height={12} fill="#10b981" rx={2} />
       <text x={0} y={-14} fill="white" fontSize={8} textAnchor="middle" dominantBaseline="central" fontWeight="bold">B</text>
-      <path d="M -3 -8 L 0 -5 L 3 -8 Z" fill="#3b82f6" />
+      <path d="M -3 -8 L 0 -5 L 3 -8 Z" fill="#10b981" />
     </g>
   )
 }
@@ -25,9 +29,9 @@ const SellMarker = (props: any) => {
   if (!payload || payload.sellPrice === undefined) return null;
   return (
     <g transform={`translate(${cx},${cy})`}>
-      <rect x={-8} y={8} width={16} height={12} fill="#f97316" rx={2} />
+      <rect x={-8} y={8} width={16} height={12} fill="#ef4444" rx={2} />
       <text x={0} y={14} fill="white" fontSize={8} textAnchor="middle" dominantBaseline="central" fontWeight="bold">S</text>
-      <path d="M -3 8 L 0 5 L 3 8 Z" fill="#f97316" />
+      <path d="M -3 8 L 0 5 L 3 8 Z" fill="#ef4444" />
     </g>
   )
 }
@@ -46,6 +50,7 @@ type TimelineItem = {
   closeVsFillColor?: string;
   motive?: { posTag: string; tags: string[]; desc: string };
   plan?: { tp: string; sl: string; desc: string };
+  aiPlan?: SavedPlan;
 };
 
 type TradeDetail = {
@@ -141,6 +146,48 @@ export default function Detail() {
   const scrollTo = searchParams.get('scroll');
   const navigate = useNavigate();
   const data = tradeData[id as keyof typeof tradeData] || tradeData['1'];
+  const latestTrade = [...data.timeline].filter(item => item.type === 'Trade').pop();
+  const [timeline, setTimeline] = useState<TimelineItem[]>(data.timeline);
+  const [editingTimelineItem, setEditingTimelineItem] = useState<TimelineItem | null>(null);
+  const [trackingVersion, setTrackingVersion] = useState(0);
+  const [savedAssetTracking, setSavedAssetTracking] = useState<SavedAssetTracking | null>(null);
+
+  useEffect(() => {
+    const sync = () => {
+      const savedRecords = readLocalResult<TimelineItem[]>(`tradingnote:timeline:${data.id}`) || [];
+      const savedById = new Map(savedRecords.map(record => [record.id, record]));
+      const legacyPlan = readLocalResult<SavedPlan>(`tradingnote:plan:${data.symbol}`);
+      const mergedTimeline = data.timeline.map(record => {
+        const savedRecord = savedById.get(record.id);
+        if (savedRecord) return { ...record, ...savedRecord, aiPlan: savedRecord.aiPlan || (record.id === latestTrade?.id ? legacyPlan || undefined : undefined) };
+        return record.id === latestTrade?.id && legacyPlan
+          ? { ...record, aiPlan: legacyPlan, plan: { ...record.plan, tp: legacyPlan.target, sl: legacyPlan.stopLoss, desc: legacyPlan.rule } }
+          : record;
+      });
+      setTimeline([...mergedTimeline, ...savedRecords.filter(record => !data.timeline.some(base => base.id === record.id))]);
+      setSavedAssetTracking(readLocalResult<SavedAssetTracking>(`tradingnote:asset-tracking:${data.id}`));
+    };
+    sync();
+    window.addEventListener(SAVED_RESULTS_EVENT, sync);
+    return () => window.removeEventListener(SAVED_RESULTS_EVENT, sync);
+  }, [data.id, data.symbol, data.timeline, latestTrade?.id]);
+
+  const handleTimelineSave = (formData: any) => {
+    if (!editingTimelineItem) return;
+    const updatedTimeline = timeline.map(item => item.id === editingTimelineItem.id ? {
+      ...item,
+      action: formData.direction,
+      price: Number(formData.price),
+      qty: Number(formData.qty),
+      amount: `¥ ${(Number(formData.price || 0) * Number(formData.qty || 0)).toFixed(2)}`,
+      motive: { posTag: formData.posTag, tags: formData.tags, desc: formData.motiveDesc },
+      plan: { tp: formData.tp, sl: formData.sl, desc: formData.planDesc },
+      aiPlan: undefined
+    } : item);
+    setTimeline(updatedTimeline);
+    saveLocalResult(`tradingnote:timeline:${data.id}`, updatedTimeline);
+    setEditingTimelineItem(null);
+  };
 
   useEffect(() => {
     if (scrollTo) {
@@ -182,7 +229,7 @@ export default function Detail() {
           <div>
             <div className="flex items-center gap-1 mb-1">
               <span className={cn("border px-1 py-0.5 rounded text-[9px] font-bold", 
-                data.direction === 'Buy' ? "bg-blue-50 text-blue-600 border-blue-100" : "bg-[#EE6C4D]/10 text-[#EE6C4D] border-[#EE6C4D]/20"
+              data.direction === 'Buy' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-rose-50 text-rose-600 border-rose-200"
               )}>{data.direction}</span>
               <span className="text-[10px] text-slate-500 font-medium">{data.timeStr} • {data.shares} shares</span>
             </div>
@@ -246,14 +293,14 @@ export default function Detail() {
         {/* Trade History Timeline */}
         <div className="mb-2.5">
           <div className="relative before:absolute before:inset-0 before:ml-[3px] before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-[1px] before:bg-gradient-to-b before:from-transparent before:via-slate-200 before:to-transparent space-y-6">
-            {data.timeline?.map(item => (
+            {timeline?.map(item => (
               <div key={item.id} className="relative flex items-start gap-2">
                 <div className={cn("absolute left-0 w-2 h-2 rounded-full border-2 mt-1.5 z-10 shadow-sm", item.type === 'Note' ? "bg-white border-slate-300" : "bg-white border-[#EE6C4D]")}></div>
                 <div className="pl-4 flex-1 w-full">
                   <div className="flex justify-between items-center mb-2">
                     <div className="text-[10px] text-slate-400 font-mono font-bold tracking-wider">{item.date}</div>
                     {item.type === 'Trade' && (
-                      <span className={cn("px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider border", item.action === 'Buy' ? "bg-blue-50 text-blue-600 border-blue-100" : "bg-rose-50 text-rose-500 border-rose-100")}>{item.action}</span>
+                      <span className={cn("px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider border", item.action === 'Buy' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-rose-50 text-rose-600 border-rose-200")}>{item.action}</span>
                     )}
                   </div>
                   
@@ -261,11 +308,11 @@ export default function Detail() {
                     <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-[0_2px_8px_rgba(11,37,69,0.02)]">
                       <div className="flex justify-between items-center mb-3">
                         <div className="flex items-center gap-2">
-                          <span className={cn("px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border", item.action === 'Buy' ? "bg-blue-50 text-blue-600 border-blue-100" : "bg-rose-50 text-rose-500 border-rose-100")}>{item.action}</span>
+                          <span className={cn("px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border", item.action === 'Buy' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-rose-50 text-rose-600 border-rose-200")}>{item.action}</span>
                           <span className="font-bold text-[#0B2545] text-[14px]">{data.symbol}</span>
                           <span className="text-[10px] text-slate-400 font-mono">{data.code}</span>
                         </div>
-                        <button className="text-slate-400 hover:text-[#EE6C4D] active:scale-95 p-1 transition-all">
+                        <button onClick={() => setEditingTimelineItem(item)} aria-label="Edit trade record" className="text-slate-400 hover:text-[#EE6C4D] active:scale-95 p-1 transition-all">
                           <Edit2 size={12} />
                         </button>
                       </div>
@@ -327,6 +374,20 @@ export default function Detail() {
                             {item.plan.desc}
                           </p>
                         )}
+                        {item.aiPlan && item.id === latestTrade?.id && (
+                          <div className="mt-2 pt-2 border-t border-slate-200/70">
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span className="text-[10px] font-bold text-[#0B2545]">M-Agent Plan</span>
+                              <span className="text-[8px] font-bold uppercase text-slate-400">Latest trade</span>
+                            </div>
+                            <div className="flex flex-wrap gap-x-3 gap-y-1 text-[9px] text-slate-600">
+                              <span>Entry <b className="text-[#0B2545]">{item.aiPlan.entryZone}</b></span>
+                              <span>Stop <b className="text-rose-600">{item.aiPlan.stopLoss}</b></span>
+                              <span>Target <b className="text-emerald-700">{item.aiPlan.target}</b></span>
+                            </div>
+                            <p className="text-[9px] text-slate-500 leading-relaxed mt-1">{item.aiPlan.rule}</p>
+                          </div>
+                        )}
                       </div>
                     </div>
                   ) : (
@@ -367,64 +428,51 @@ export default function Detail() {
             <Zap size={12} className="text-[#EE6C4D]" />
             AI Tracking
           </h2>
-          <span className="bg-[#EE6C4D]/10 border border-[#EE6C4D]/20 text-[#EE6C4D] px-1.5 py-0.5 rounded text-[8px] font-bold flex items-center gap-0.5 shadow-sm uppercase">
-            <Clock size={8} /> Post-trade Update
-          </span>
+          <button onClick={() => setTrackingVersion(version => version + 1)} className="bg-[#0B2545] text-white px-2.5 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 active:scale-95 transition-transform">
+            <Sparkles size={10} /> {trackingVersion > 0 ? 'Regenerate' : 'Generate'}
+          </button>
         </div>
 
-        <div className="space-y-2.5">
-          {/* PnL Attribution */}
-          <div className="flex gap-2">
-            <div className="w-1 h-1 rounded-full bg-blue-500 mt-1.5 shrink-0 shadow-[0_0_4px_rgba(59,130,246,0.6)]"></div>
+        <div className="space-y-3">
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-wide text-[#EE6C4D] mb-1">Overall Summary</div>
+            <p className="text-[10px] text-slate-700 leading-relaxed">{savedAssetTracking?.overallSummary || (trackingVersion % 2 === 0 ? data.analysis.comprehensive : `${data.symbol} review: ${data.analysis.comprehensive}`)}</p>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <div className="text-[11px] font-bold text-[#0B2545] mb-0.5">PnL Attribution</div>
-              <p className="text-[10px] text-slate-600 leading-relaxed">{data.analysis.pnl}</p>
+              <div className="text-[10px] font-bold text-[#0B2545] mb-1">P&amp;L Result</div>
+              <p className="text-[10px] text-slate-700 leading-relaxed">{savedAssetTracking?.pnlResult || (trackingVersion % 2 === 0 ? data.analysis.pnl : `${data.analysis.pnl} Compare the realized return with the planned exit.`)}</p>
             </div>
-          </div>
-
-          {/* Execution & Deviation */}
-          <div className="flex gap-2">
-            <div className="w-1 h-1 rounded-full bg-emerald-500 mt-1.5 shrink-0 shadow-[0_0_4px_rgba(16,185,129,0.6)]"></div>
             <div>
-              <div className="text-[11px] font-bold text-[#0B2545] mb-0.5">Execution</div>
-              <div className="bg-slate-50 border border-slate-100/60 rounded-lg p-2 mt-1 mb-1">
-                <div className="flex items-center gap-1 mb-1">
-                  {data.analysis.execution === 'Followed plan' ? <CheckCircle2 size={10} className="text-emerald-500" /> : <XCircle size={10} className="text-rose-500" />}
-                  <span className="text-[10px] font-bold text-[#134074]">{data.analysis.execution}</span>
-                </div>
-                <div className="text-[10px] text-slate-500 flex items-start gap-1">
-                  <Info size={10} className="shrink-0 mt-0.5" />
-                  <span className="leading-relaxed">Deviation: {data.analysis.deviation}</span>
-                </div>
-              </div>
+              <div className="text-[10px] font-bold text-[#0B2545] mb-1">Process Result</div>
+              <p className="text-[10px] text-slate-700 leading-relaxed">{savedAssetTracking?.processResult || (trackingVersion % 2 === 0 ? `${data.analysis.execution}. ${data.analysis.deviation}` : `${data.analysis.execution}. Check whether each decision followed the original risk rules. ${data.analysis.deviation}`)}</p>
             </div>
           </div>
-
-          {/* Market Context */}
-          <div className="flex gap-2">
-            <div className="w-1 h-1 rounded-full bg-purple-500 mt-1.5 shrink-0 shadow-[0_0_4px_rgba(168,85,247,0.6)]"></div>
-            <div>
-              <div className="text-[11px] font-bold text-[#0B2545] mb-0.5">Market Context</div>
-              <p className="text-[10px] text-slate-600 leading-relaxed">{data.analysis.comprehensive}</p>
-            </div>
+          <div className="border-t border-slate-100 pt-2">
+            <div className="text-[10px] font-bold text-[#0B2545] mb-1">Lessons Learned</div>
+            <p className="text-[10px] text-slate-700 leading-relaxed">{savedAssetTracking?.lessonsLearned || (trackingVersion % 2 === 0 ? data.analysis.suggestion : `${data.analysis.suggestion} Record this rule in the next trade plan.`)}</p>
           </div>
-
-          {/* AI Suggestion */}
-          <div className={cn("border rounded-xl p-2.5 shadow-sm mt-2", 
-            id === '2' ? "bg-emerald-50/50 border-emerald-100" : "bg-[#EE6C4D]/5 border-[#EE6C4D]/20"
-          )}>
-            <div className={cn("flex items-center gap-1 text-[11px] font-bold mb-1", id === '2' ? "text-emerald-700" : "text-[#EE6C4D]")}>
-              <Sparkles size={11} /> AI Suggestion
-            </div>
-            <p className="text-[10px] text-[#134074] leading-relaxed">{data.analysis.suggestion}</p>
-          </div>
+          {savedAssetTracking && <div className="text-right text-[8px] text-emerald-700 font-bold uppercase">Updated from M-Agent</div>}
         </div>
       </div>
+
+      <RecordDrawer
+        isOpen={Boolean(editingTimelineItem)}
+        onClose={() => setEditingTimelineItem(null)}
+        initialData={editingTimelineItem ? {
+          ...editingTimelineItem,
+          symbol: data.symbol,
+          type: editingTimelineItem.action || data.direction,
+          motive: editingTimelineItem.motive || { posTag: '', tags: [], desc: '' },
+          plan: editingTimelineItem.plan || { tp: '', sl: '', desc: '' }
+        } : null}
+        onSave={handleTimelineSave}
+      />
 
       {/* Floating Agent Entry */}
       <div className="fixed bottom-6 right-4 z-40">
         <button 
-          onClick={() => navigate(`/agent?trade=${data.id}`)} 
+          onClick={() => navigate(`/agent?trade=${data.id}&ref=detail-${data.id}&symbol=${encodeURIComponent(data.symbol)}&pnl=${encodeURIComponent(data.profitVal)}&prompt=How%20did%20I%20execute%20these%20trades%3F`)}
           className="bg-[#0B2545] text-white p-2.5 rounded-full shadow-lg hover:scale-105 active:scale-95 transition-transform flex items-center justify-center relative"
         >
           <BotMessageSquare size={18} />

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { 
-  ArrowUpRight, Plus, X, Sparkles, Bell, Edit3, ChevronLeft, ChevronRight, Search
+  ArrowUpRight, Plus, X, Sparkles, Edit3, ChevronLeft, ChevronRight, Search, RefreshCw
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import TradesModule from '../components/TradesModule';
@@ -13,6 +13,10 @@ export default function Home() {
   const navigate = useNavigate();
 
   const [onboardingStep, setOnboardingStep] = useState(0);
+  const [trackingGenerated, setTrackingGenerated] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState(new Date(2026, 6, 1));
+  const [showCalendarFilter, setShowCalendarFilter] = useState(false);
+  const [calendarFilter, setCalendarFilter] = useState<'all' | 'profit' | 'loss'>('all');
 
   const [attentionNotes, setAttentionNotes] = useState([
     { id: 2, text: "Watch for tech stocks rotation into small caps.", time: "Today, 09:30" }
@@ -76,6 +80,20 @@ export default function Home() {
       return next;
     });
   };
+
+  const monthKey = `${calendarMonth.getFullYear()}-${String(calendarMonth.getMonth() + 1).padStart(2, '0')}`;
+  const monthLabel = calendarMonth.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+  const julyPnlByDay: Record<number, { pnl: string; value: number }> = {
+    1: { pnl: '+1.2k', value: 1200 }, 2: { pnl: '-860', value: -860 }, 3: { pnl: '+2.1k', value: 2100 },
+    6: { pnl: '-2.5k', value: -2500 }, 7: { pnl: '+620', value: 620 }, 8: { pnl: '+1.8k', value: 1800 },
+    9: { pnl: '-1.3k', value: -1300 }, 10: { pnl: '+3.0k', value: 3000 }, 13: { pnl: '-410', value: -410 }, 14: { pnl: '+3.3k', value: 3330 }
+  };
+  const calendarDaysInMonth = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 0).getDate();
+  const calendarCells: Array<number | null> = [
+    ...Array.from({ length: new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1).getDay() }, () => null),
+    ...Array.from({ length: calendarDaysInMonth }, (_, index) => index + 1)
+  ];
+  while (calendarCells.length % 7 !== 0) calendarCells.push(null);
 
   return (
     <div className="w-full min-h-full pb-[80px] bg-[#F8F9FA]">
@@ -145,152 +163,122 @@ export default function Home() {
         {/* Trading Calendar */}
         <div className="pt-2 pb-1 relative z-10">
           <div className="bg-white/90 backdrop-blur-md rounded-xl p-3 border border-white shadow-[0_4px_12px_rgba(11,37,69,0.03)] relative z-10 overflow-hidden">
-            <div className="flex justify-between items-center mb-3 ml-1">
+            <div className="flex justify-between items-center mb-2 ml-1">
               <h2 className="text-[14px] font-bold text-[#0B2545] tracking-tight">Trading Calendar</h2>
               <div className="flex items-center gap-1.5 bg-slate-50/80 backdrop-blur-sm border border-slate-100/80 rounded-lg px-2 py-1 shadow-sm">
-                <button className="text-slate-400 hover:text-slate-600 active:scale-95 transition-transform">
+                <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))} aria-label="Previous month" className="text-slate-400 hover:text-slate-600 active:scale-95 transition-transform">
                   <ChevronLeft size={12} />
                 </button>
-                <span className="text-[11px] font-bold text-slate-500 font-mono tracking-wider min-w-[50px] text-center">Jul 2026</span>
-                <button className="text-slate-400 hover:text-slate-600 active:scale-95 transition-transform">
+                <span className="text-[10px] font-bold text-slate-500 font-mono tracking-wider min-w-[50px] text-center">{monthLabel}</span>
+                <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))} aria-label="Next month" className="text-slate-400 hover:text-slate-600 active:scale-95 transition-transform">
                   <ChevronRight size={12} />
                 </button>
                 <div className="w-px h-3 bg-slate-200 mx-0.5"></div>
-                <button className="text-slate-400 hover:text-slate-600 active:scale-95 transition-transform">
+                <button onClick={() => setShowCalendarFilter(open => !open)} aria-label="Calendar filters" aria-expanded={showCalendarFilter} className={cn("transition-transform active:scale-95", showCalendarFilter ? "text-[#EE6C4D]" : "text-slate-400 hover:text-slate-600")}>
                   <Search size={12} />
                 </button>
               </div>
             </div>
+
+            {showCalendarFilter && (
+              <div className="flex items-center justify-between gap-2 mb-2 px-1">
+                <input
+                  aria-label="Filter calendar by month"
+                  type="month"
+                  value={monthKey}
+                  onChange={event => {
+                    const [year, month] = event.target.value.split('-').map(Number);
+                    if (year && month) setCalendarMonth(new Date(year, month - 1, 1));
+                  }}
+                  className="min-w-0 bg-white border border-slate-200 rounded-md px-1.5 py-1 text-[9px] text-slate-600"
+                />
+                <div className="flex rounded-md border border-slate-200 bg-slate-50 p-0.5">
+                  {(['all', 'profit', 'loss'] as const).map(filter => (
+                    <button key={filter} onClick={() => setCalendarFilter(filter)} className={cn("px-2 py-1 rounded text-[8px] font-bold capitalize", calendarFilter === filter ? "bg-white text-[#0B2545] shadow-sm" : "text-slate-400")}>{filter}</button>
+                  ))}
+                </div>
+              </div>
+            )}
             
-            <div className="grid grid-cols-3 gap-2 mb-3 ml-1">
+            <div className="grid grid-cols-3 gap-2 mb-2 ml-1">
               <div>
-                <div className="text-slate-400 text-[9px] mb-0.5 uppercase tracking-wider">Month PnL</div>
-                <div className="text-emerald-500 font-bold text-[12px] font-mono">+7,010</div>
+                <div className="text-slate-400 text-[8px] mb-0.5 uppercase tracking-wider">Month PnL</div>
+                <div className="text-emerald-500 font-bold text-[10px] font-mono">{monthKey === '2026-07' ? '+7,010' : '—'}</div>
               </div>
               <div>
-                <div className="text-slate-400 text-[9px] mb-0.5 uppercase tracking-wider">Win / Loss Days</div>
-                <div className="text-[#0B2545] font-bold text-[12px] font-mono flex gap-1"><span className="text-emerald-500">6</span>/<span className="text-rose-500">4</span></div>
+                <div className="text-slate-400 text-[8px] mb-0.5 uppercase tracking-wider">Win / Loss Days</div>
+                <div className="text-[#0B2545] font-bold text-[10px] font-mono flex gap-1"><span className="text-emerald-500">{monthKey === '2026-07' ? '6' : '0'}</span>/<span className="text-rose-500">{monthKey === '2026-07' ? '4' : '0'}</span></div>
               </div>
               <div>
-                <div className="text-slate-400 text-[9px] mb-0.5 uppercase tracking-wider">Best Day</div>
-                <div className="text-[#0B2545] font-bold text-[12px] flex items-center gap-1 font-mono">Jul 14 <span className="text-emerald-500 text-[10px]">+3.3k</span></div>
+                <div className="text-slate-400 text-[8px] mb-0.5 uppercase tracking-wider">Best Day</div>
+                <div className="text-[#0B2545] font-bold text-[10px] flex items-center gap-1 font-mono">{monthKey === '2026-07' ? <>Jul 14 <span className="text-emerald-500 text-[9px]">+3.3k</span></> : '—'}</div>
               </div>
             </div>
 
-            {/* Grid Map omitted for brevity, keeping structure intact */}
-            <div className="grid grid-cols-7 gap-1.5 mb-4 ml-1">
-              <div />
-              <div />
-              <div className="h-10 rounded-lg p-1 flex flex-col justify-between bg-emerald-100 text-emerald-700">
-                <span className="text-[9px] font-bold opacity-60">1</span>
-                <span className="text-[9px] font-bold text-center -mt-1 font-mono tracking-tighter">+1.2k</span>
-              </div>
-              <div className="h-10 rounded-lg p-1 flex flex-col justify-between bg-rose-200 text-rose-800">
-                <span className="text-[9px] font-bold opacity-60">2</span>
-                <span className="text-[9px] font-bold text-center -mt-1 font-mono tracking-tighter">-860</span>
-              </div>
-              <div className="h-10 rounded-lg p-1 flex flex-col justify-between bg-emerald-300 text-emerald-900">
-                <span className="text-[9px] font-bold opacity-60">3</span>
-                <span className="text-[9px] font-bold text-center -mt-1 font-mono tracking-tighter">+2.1k</span>
-              </div>
-              <div className="h-10 flex flex-col items-center justify-center border border-slate-50 rounded-lg relative">
-                <span className="text-[8px] font-bold text-slate-300 absolute top-1 left-1">4</span>
-                <span className="text-[7px] font-bold text-slate-200 mt-2 uppercase tracking-wider">Closed</span>
-              </div>
-              <div className="h-10 flex flex-col items-center justify-center border border-slate-50 rounded-lg relative">
-                <span className="text-[8px] font-bold text-slate-300 absolute top-1 left-1">5</span>
-                <span className="text-[7px] font-bold text-slate-200 mt-2 uppercase tracking-wider">Closed</span>
-              </div>
-
-              {/* Week 2 */}
-              <div className="h-10 rounded-lg p-1 flex flex-col justify-between bg-rose-300 text-rose-900">
-                <span className="text-[9px] font-bold opacity-80">6</span>
-                <span className="text-[9px] font-bold text-center -mt-1 font-mono tracking-tighter">-2.5k</span>
-              </div>
-              <div className="h-10 rounded-lg p-1 flex flex-col justify-between bg-emerald-50 text-emerald-600">
-                <span className="text-[9px] font-bold opacity-60">7</span>
-                <span className="text-[9px] font-bold text-center -mt-1 font-mono tracking-tighter">+620</span>
-              </div>
-              <div className="h-10 rounded-lg p-1 flex flex-col justify-between bg-emerald-200 text-emerald-800">
-                <span className="text-[9px] font-bold opacity-60">8</span>
-                <span className="text-[9px] font-bold text-center -mt-1 font-mono tracking-tighter">+1.8k</span>
-              </div>
-              <div className="h-10 rounded-lg p-1 flex flex-col justify-between bg-rose-300 text-rose-900">
-                <span className="text-[9px] font-bold opacity-60">9</span>
-                <span className="text-[9px] font-bold text-center -mt-1 font-mono tracking-tighter">-1.3k</span>
-              </div>
-              <div className="h-10 rounded-lg p-1 flex flex-col justify-between bg-emerald-500 text-white">
-                <span className="text-[9px] font-bold opacity-80">10</span>
-                <span className="text-[9px] font-bold text-center -mt-1 font-mono tracking-tighter">+3.0k</span>
-              </div>
-              <div className="h-10 flex flex-col items-center justify-center border border-slate-50 rounded-lg relative">
-                <span className="text-[8px] font-bold text-slate-300 absolute top-1 left-1">11</span>
-                <span className="text-[7px] font-bold text-slate-200 mt-2 uppercase tracking-wider">Closed</span>
-              </div>
-              <div className="h-10 flex flex-col items-center justify-center border border-slate-50 rounded-lg relative">
-                <span className="text-[8px] font-bold text-slate-300 absolute top-1 left-1">12</span>
-                <span className="text-[7px] font-bold text-slate-200 mt-2 uppercase tracking-wider">Closed</span>
-              </div>
-
-              {/* Week 3 */}
-              <div className="h-10 rounded-lg p-1 flex flex-col justify-between bg-rose-100 text-rose-700">
-                <span className="text-[9px] font-bold opacity-60">13</span>
-                <span className="text-[9px] font-bold text-center -mt-1 font-mono tracking-tighter">-410</span>
-              </div>
-              <div 
-                onClick={() => navigate('/daily/2026-07-14')}
-                className="h-10 rounded-lg p-1 flex flex-col justify-between bg-emerald-500 text-white ring-2 ring-offset-1 ring-[#EE6C4D] shadow-sm cursor-pointer active:scale-95 transition-transform"
-              >
-                <span className="text-[9px] font-bold opacity-80">14</span>
-                <span className="text-[9px] font-bold text-center -mt-1 font-mono tracking-tighter">+3.3k</span>
-              </div>
-              
-              {/* Empty Days */}
-              {Array.from({ length: 17 }).map((_, i) => (
-                <div key={i+15} className="h-10 rounded-lg bg-slate-50/50 flex items-start justify-start p-1.5">
-                  <span className="text-[8px] font-bold text-slate-300">{i+15}</span>
-                </div>
+            <div className="grid grid-cols-7 gap-0.5 mb-0.5 text-center">
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+                <div key={day} className="text-[7px] font-bold text-slate-400 py-0.5">{day}</div>
               ))}
             </div>
-            
-            <div className="flex items-center justify-between ml-1">
-              <div className="flex items-center gap-1">
-                <span className="text-[9px] font-bold text-slate-400 mr-1">Loss</span>
-                {['bg-rose-400', 'bg-rose-300', 'bg-rose-200', 'bg-rose-100', 'bg-slate-100', 'bg-emerald-50', 'bg-emerald-100', 'bg-emerald-300', 'bg-emerald-500'].map((c, i) => (
-                  <div key={i} className={cn("w-2.5 h-2.5 rounded-[2px]", c)}></div>
-                ))}
-                <span className="text-[9px] font-bold text-slate-400 ml-1">Profit</span>
-              </div>
-              <div className="text-[9px] font-bold text-slate-400">Tap a day to review trades</div>
+            <div className="grid grid-cols-7 gap-1 ml-1">
+              {calendarCells.map((day, index) => {
+                if (!day) return <div key={`empty-${index}`} className="h-7" />;
+                const pnl = monthKey === '2026-07' ? julyPnlByDay[day] : undefined;
+                const filteredOut = pnl ? (calendarFilter === 'profit' ? pnl.value < 0 : calendarFilter === 'loss' ? pnl.value > 0 : false) : false;
+                const isJul14 = monthKey === '2026-07' && day === 14;
+                const tone = pnl ? (pnl.value >= 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700') : 'bg-slate-50 text-slate-400';
+                return (
+                  <button
+                    key={day}
+                    disabled={filteredOut || !isJul14}
+                    onClick={() => navigate('/daily/2026-07-14')}
+                    className={cn(
+                      "h-7 min-w-0 rounded-md px-0.5 flex flex-col items-center justify-center leading-none transition-colors",
+                      tone,
+                      filteredOut && "opacity-25",
+                      isJul14 && "!bg-emerald-500 !text-white ring-1 ring-[#EE6C4D] shadow-sm cursor-pointer active:scale-95"
+                    )}
+                  >
+                    <span className="text-[8px] font-bold">{day}</span>
+                    {pnl && <span className="text-[6px] font-bold font-mono mt-0.5">{pnl.pnl}</span>}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
 
-        {/* Attention Module (AI Only) */}
+        {/* AI Tracking Summary */}
         <div id="attention-module" className="pt-1.5 pb-1 relative z-10">
           <div className="bg-white/90 backdrop-blur-md rounded-xl p-3 border border-white shadow-[0_4px_12px_rgba(11,37,69,0.03)] relative overflow-hidden">
             <div className="absolute -right-4 -top-4 w-24 h-24 bg-[#EE6C4D]/5 rounded-full blur-xl pointer-events-none"></div>
             
             <div className="flex items-center justify-between mb-3 relative z-10">
               <h2 className="text-[14px] font-bold text-[#0B2545] tracking-tight flex items-center gap-1.5">
-                <Bell size={14} className="text-[#EE6C4D]" /> Attention
+                <Sparkles size={14} className="text-[#EE6C4D]" /> AI Tracking
               </h2>
+              <button
+                onClick={() => setTrackingGenerated(true)}
+                className="bg-[#0B2545] hover:bg-[#134074] active:scale-95 text-white px-2.5 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1.5 transition-all shadow-sm"
+              >
+                {trackingGenerated ? <RefreshCw size={11} /> : <Sparkles size={11} />}
+                {trackingGenerated ? 'Regenerate' : 'Generate'}
+              </button>
             </div>
             
             <div className="bg-[#0B2545]/[0.03] p-2.5 rounded-lg border border-[#0B2545]/10 relative z-10">
-              <div className="text-[10px] font-bold text-[#0B2545] mb-1.5 flex items-center gap-1.5 uppercase tracking-wider">
-                <Sparkles size={12} className="text-[#EE6C4D]" /> AI Insights
-              </div>
-              <ul className="space-y-1.5 text-[11px] text-slate-700 font-medium leading-relaxed pl-1.5">
-                <li className="flex items-start gap-1.5">
-                  <div className="w-1 h-1 rounded-full bg-[#EE6C4D] shrink-0 mt-1.5"></div>
-                  <span>Monitor price levels for technical confirmation on <span className="font-bold text-[#0B2545]">ZIJIN MINING</span>.</span>
-                </li>
-                <li className="flex items-start gap-1.5">
-                  <div className="w-1 h-1 rounded-full bg-[#EE6C4D] shrink-0 mt-1.5"></div>
-                  <span>Track WTI crude oil volatility ahead of the weekend.</span>
-                </li>
-              </ul>
+              {trackingGenerated ? (
+                <div className="space-y-2 text-[11px] text-slate-700 font-medium leading-relaxed">
+                  <p className="font-bold text-[#134074]">Today’s execution was disciplined, with gains supported by planned exits and timely risk control.</p>
+                  <ul className="space-y-1.5">
+                    <li className="flex items-start gap-1.5"><span className="w-1 h-1 rounded-full bg-emerald-500 shrink-0 mt-1.5" /><span><strong className="text-[#0B2545]">ZIJIN MINING:</strong> Sold near the target; execution followed the plan.</span></li>
+                    <li className="flex items-start gap-1.5"><span className="w-1 h-1 rounded-full bg-emerald-500 shrink-0 mt-1.5" /><span><strong className="text-[#0B2545]">ZIJIN INTL:</strong> Exited at the planned stop; discipline held.</span></li>
+                    <li className="flex items-start gap-1.5"><span className="w-1 h-1 rounded-full bg-amber-500 shrink-0 mt-1.5" /><span><strong className="text-[#0B2545]">JEREH:</strong> Exit came after the planned stop. Set stop orders at entry next time.</span></li>
+                  </ul>
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-400 font-medium text-center py-2">Tap Generate for today’s tracking summary.</p>
+              )}
             </div>
           </div>
         </div>

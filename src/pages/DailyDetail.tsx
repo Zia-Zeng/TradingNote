@@ -3,10 +3,15 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ChevronLeft, Sparkles, Edit3, X, Plus, BotMessageSquare } from 'lucide-react';
 import { cn } from '../lib/utils';
 import TradesModule from '../components/TradesModule';
+import { readLocalResult, SAVED_RESULTS_EVENT } from '../lib/saved-results';
+
+type SavedTracking = { title: string; body: string; savedAt: string };
 
 export default function DailyDetail() {
   const navigate = useNavigate();
   const { date } = useParams();
+  const [reviewVersion, setReviewVersion] = useState(0);
+  const [savedTracking, setSavedTracking] = useState<SavedTracking | null>(null);
 
   const [attentionNotes, setAttentionNotes] = useState([
     { id: 1, text: "Focus on sector rotation into defensive stocks before weekend.", time: "Jul 14, 15:20" }
@@ -17,6 +22,14 @@ export default function DailyDetail() {
     const el = document.getElementById('daily-scroll-container');
     if (el) el.scrollTo(0, 0);
   }, []);
+
+  useEffect(() => {
+    const key = `tradingnote:tracking:${date || '2026-07-14'}`;
+    const sync = () => setSavedTracking(readLocalResult<SavedTracking>(key));
+    sync();
+    window.addEventListener(SAVED_RESULTS_EVENT, sync);
+    return () => window.removeEventListener(SAVED_RESULTS_EVENT, sync);
+  }, [date]);
 
   const handleAddAttentionNote = () => {
     if (newAttentionNote.trim()) {
@@ -129,12 +142,28 @@ export default function DailyDetail() {
             <h2 className="text-[16px] font-bold text-[#0B2545] flex items-center gap-1.5">
               <Sparkles size={16} className="text-[#EE6C4D]" /> AI TradingNote
             </h2>
-            <span className="text-[9px] font-bold text-slate-400 bg-slate-100 px-2 py-1 rounded uppercase tracking-wider">Post-trade Review</span>
+            <button
+              onClick={() => setReviewVersion(version => version + 1)}
+              className="bg-[#0B2545] text-white px-2.5 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1.5 active:scale-95 transition-transform"
+            >
+              <Sparkles size={11} /> {reviewVersion === 0 ? 'Generate' : 'Regenerate'}
+            </button>
           </div>
-          <p className="text-[11px] text-slate-500 mb-4">Compares each note with what the price did after the trade.</p>
+
+          {savedTracking && (
+            <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3">
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <div className="text-[11px] font-bold text-emerald-800">{savedTracking.title}</div>
+                <div className="text-[9px] text-emerald-700 font-bold uppercase">Saved from M-Agent</div>
+              </div>
+              <p className="text-[12px] text-slate-700 leading-relaxed">{savedTracking.body}</p>
+            </div>
+          )}
 
           <p className="text-[13px] font-bold text-[#134074] leading-relaxed mb-6">
-            Most of today's gain came before your exits: ZIJIN MINING rose 3.2% into your sale and BIG DATA ETF added 1.5%. Two of the three sells followed plan; JEREH came late.
+            {reviewVersion % 2 === 0
+              ? "Most of today's gain came before your exits: ZIJIN MINING rose 3.2% into your sale and BIG DATA ETF added 1.5%. Two of the three sells followed plan; JEREH came late."
+              : "Two exits followed the plan and protected gains. JEREH was the exception: waiting past the ¥145 stop added avoidable downside. Set stops when entering each trade."}
           </p>
 
           <div className="space-y-5">
@@ -144,10 +173,12 @@ export default function DailyDetail() {
                 <div className="font-bold text-[#0B2545] text-[12px] flex items-center gap-1.5">
                   ZIJIN MINING <span className="text-[10px] text-slate-400 font-mono font-medium">10:00</span>
                 </div>
-                <div className="text-amber-600 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded text-[10px] font-bold">Price ran on</div>
+                <div className="text-amber-600 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded text-[10px] font-bold">{reviewVersion % 2 === 0 ? 'Price ran on' : 'Near target'}</div>
               </div>
               <p className="text-[12px] text-slate-600 leading-relaxed font-medium">
-                ZIJIN closed at 26.95, 0.5% above your fill, so it may feel like you sold too soon. You still exited within 0.7% of your 27 target. That is the plan working, not a mistake.
+                {reviewVersion % 2 === 0
+                  ? 'ZIJIN closed at 26.95, 0.5% above your fill, so it may feel like you sold too soon. You still exited within 0.7% of your 27 target. That is the plan working, not a mistake.'
+                  : 'The close was 0.5% above your fill, but your exit was within 0.7% of the ¥27 target. The planned exit still made sense.'}
               </p>
             </div>
             <div>
@@ -155,10 +186,12 @@ export default function DailyDetail() {
                 <div className="font-bold text-[#0B2545] text-[12px] flex items-center gap-1.5">
                   ZIJIN INTL <span className="text-[10px] text-slate-400 font-mono font-medium">11:10</span>
                 </div>
-                <div className="text-emerald-600 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded text-[10px] font-bold">Thesis held</div>
+                <div className="text-emerald-600 bg-emerald-50 border border-emerald-100 px-1.5 py-0.5 rounded text-[10px] font-bold">{reviewVersion % 2 === 0 ? 'Thesis held' : 'Stop respected'}</div>
               </div>
               <p className="text-[12px] text-slate-600 leading-relaxed font-medium">
-                You sold exactly at the stop you set on Jul 8, and the stock fell another 1.5%. Discipline paid.
+                {reviewVersion % 2 === 0
+                  ? 'You sold exactly at the stop you set on Jul 8, and the stock fell another 1.5%. Discipline paid.'
+                  : 'The ¥94 stop was respected and the stock fell another 1.5%. The exit limited further downside.'}
               </p>
             </div>
             <div>
@@ -166,10 +199,12 @@ export default function DailyDetail() {
                 <div className="font-bold text-[#0B2545] text-[12px] flex items-center gap-1.5">
                   JEREH <span className="text-[10px] text-slate-400 font-mono font-medium">14:30</span>
                 </div>
-                <div className="text-amber-600 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded text-[10px] font-bold">Late vs plan</div>
+                <div className="text-amber-600 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded text-[10px] font-bold">{reviewVersion % 2 === 0 ? 'Late vs plan' : 'Stop missed'}</div>
               </div>
               <p className="text-[12px] text-slate-600 leading-relaxed font-medium">
-                JEREH kept falling (-0.8%) after you sold, so exiting was right. But the plan's stop was 145; waiting cost about ¥500 more than the plan allowed.
+                {reviewVersion % 2 === 0
+                  ? "JEREH kept falling (-0.8%) after you sold, so exiting was right. But the plan's stop was 145; waiting cost about ¥500 more than the plan allowed."
+                  : 'Price fell another 0.8% after the exit. The recovery was uncertain, but waiting below the ¥145 stop added about ¥500 in losses.'}
               </p>
             </div>
           </div>
@@ -179,7 +214,9 @@ export default function DailyDetail() {
               <Sparkles size={14} /> Next session
             </h3>
             <p className="text-[12px] text-[#0B2545] font-medium leading-relaxed">
-              Place stops as orders at entry, so an exit like JEREH's doesn't wait on a decision you'd rather not make.
+              {reviewVersion % 2 === 0
+                ? "Place stops as orders at entry, so an exit like JEREH's doesn't wait on a decision you'd rather not make."
+                : 'Set a hard stop when you enter. This keeps a broken setup from turning into a discretionary exit.'}
             </p>
           </div>
         </div>
@@ -188,7 +225,7 @@ export default function DailyDetail() {
       {/* Floating Agent Entry */}
       <div className="fixed bottom-6 right-4 z-40">
         <button 
-          onClick={() => navigate('/agent')} 
+          onClick={() => navigate('/agent?ref=daily-2026-07-14&prompt=Review%20today%27s%20trades')}
           className="bg-[#0B2545] text-white p-2.5 rounded-full shadow-lg hover:scale-105 active:scale-95 transition-transform flex items-center justify-center relative"
         >
           <BotMessageSquare size={18} />

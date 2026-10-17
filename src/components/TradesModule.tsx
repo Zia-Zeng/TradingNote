@@ -3,6 +3,9 @@ import { MessageCircle, Edit3, Plus, Target, Tag, Edit2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import RecordDrawer from './RecordDrawer';
 import { useSearchParams } from 'react-router-dom';
+import { readLocalResult, SAVED_RESULTS_EVENT } from '../lib/saved-results';
+
+type SavedReview = { date: string; asset: string; summary: string };
 
 const INITIAL_TRADES = [
   {
@@ -33,6 +36,16 @@ export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingTrade, setEditingTrade] = useState<any>(null);
   const [searchParams, setSearchParams] = useSearchParams();
+  const [savedReviews, setSavedReviews] = useState<Record<string, SavedReview | null>>({});
+
+  useEffect(() => {
+    const sync = () => setSavedReviews({
+      JEREH: readLocalResult<SavedReview>('tradingnote:review:2026-07-14:JEREH'),
+    });
+    sync();
+    window.addEventListener(SAVED_RESULTS_EVENT, sync);
+    return () => window.removeEventListener(SAVED_RESULTS_EVENT, sync);
+  }, []);
 
   useEffect(() => {
     const action = searchParams.get('trade_action');
@@ -124,7 +137,7 @@ export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
             <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-[0_2px_8px_rgba(11,37,69,0.02)]">
               <div className="flex justify-between items-center mb-3">
                 <div className="flex items-center gap-2">
-                  <span className={cn("px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border", trade.type === 'Buy' ? "bg-blue-50 text-blue-600 border-blue-100" : "bg-rose-50 text-rose-500 border-rose-100")}>{trade.type}</span>
+                  <span className={cn("px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border", trade.type === 'Buy' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-rose-50 text-rose-600 border-rose-200")}>{trade.type}</span>
                   <span className="font-bold text-[#0B2545] text-[14px]">{trade.symbol}</span>
                   <span className="text-[10px] text-slate-400 font-mono">{trade.code}</span>
                 </div>
@@ -195,6 +208,15 @@ export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
                   </p>
                 )}
               </div>
+              {savedReviews[trade.symbol] && (
+                <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50/70 p-2.5">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[10px] font-bold text-emerald-800">Saved AI Review</span>
+                    <span className="text-[8px] font-bold uppercase text-emerald-700">{savedReviews[trade.symbol]?.date}</span>
+                  </div>
+                  <p className="text-[10px] text-slate-700 leading-relaxed">{savedReviews[trade.symbol]?.summary}</p>
+                </div>
+              )}
             </div>
           </div>
         ))}
