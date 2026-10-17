@@ -328,7 +328,7 @@ export default function Detail() {
                         </div>
                         <div className="text-right">
                           <div className="text-[9px] text-slate-400 uppercase font-bold tracking-wider mb-0.5">Close vs Fill</div>
-                          <div className={cn("font-bold font-mono text-[12px]", item.closeVsFillColor || "text-slate-400")}>{item.closeVsFill || '--'}</div>
+                          <div className={cn("font-bold font-mono text-[12px]", ('closeVsFillColor' in item && item.closeVsFillColor) || "text-slate-400")}>{('closeVsFill' in item && item.closeVsFill) || '--'}</div>
                         </div>
                       </div>
                       

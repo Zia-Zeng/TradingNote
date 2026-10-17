@@ -5,13 +5,15 @@ import {
   BotMessageSquare, Send, User, 
   ChevronLeft, BarChart2, BookOpen,
   History, Sparkles, AlertTriangle, Info, FileText, Activity, MessageSquare, LineChart, Target,
-  Settings, Play, ArrowLeft, CheckCircle2, Search, X
+  Settings, Play, ArrowLeft, CheckCircle2, Search, X, Loader2, MessageSquarePlus
 } from 'lucide-react';
 import { 
   ComposedChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Scatter 
 } from 'recharts';
 import { motion, AnimatePresence } from 'framer-motion';
 import { readLocalResult, saveLocalResult } from '../lib/saved-results';
+
+const AGENT_CHAT_URL = 'http://127.0.0.1:8000/api/agent/chat';
 
 interface Message {
   id: string;
@@ -110,6 +112,10 @@ export default function Agent() {
   const [savedReview, setSavedReview] = useState(false);
   const [savedTask, setSavedTask] = useState(false);
   const [savedTasks, setSavedTasks] = useState<any[]>(() => readLocalResult<any[]>('tradingnote:backtest-tasks') || []);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [isSending, setIsSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const chatSessionRef = useRef(0);
   
   const navigate = useNavigate();
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -758,8 +764,81 @@ export default function Agent() {
     }, 100);
   }, [messages]);
 
+  const sendChatMessage = async (currentInput: string) => {
+    const userMsgId = `u_${Date.now()}`;
+    const pendingId = `${userMsgId}_pending`;
+    const session = chatSessionRef.current;
+
+    setSendError(null);
+    setIsSending(true);
+    setMessages(prev => [
+      ...prev,
+      { id: userMsgId, role: 'user', content: currentInput },
+      { id: pendingId, role: 'agent', content: <Thinking /> }
+    ]);
+
+    try {
+      let res: Response;
+      try {
+        res = await fetch(AGENT_CHAT_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: currentInput,
+            conversation_id: conversationId,
+            action: action ?? null,
+            trade_id: tradeId ?? null,
+            step: step ?? null,
+            reference: reference ?? null,
+            asset: action === 'draft' || isAssetReference ? draftAsset : null,
+            symbol: searchParams.get('symbol'),
+            pnl: searchParams.get('pnl')
+          })
+        });
+      } catch {
+        throw new Error("Can't reach the Agent backend at 127.0.0.1:8000. Make sure it is running, then tap send to retry.");
+      }
+
+      if (!res.ok) {
+        throw new Error(`Agent backend returned an error (HTTP ${res.status}). Please try again.`);
+      }
+
+      const data = await res.json().catch(() => null);
+      if (!data || typeof data.reply !== 'string') {
+        throw new Error('Agent backend returned an unexpected response. Please try again.');
+      }
+      if (session !== chatSessionRef.current) return;
+
+      if (typeof data.conversation_id === 'string') {
+        setConversationId(data.conversation_id);
+      }
+      setMessages(prev => prev.map(m =>
+        m.id === pendingId
+          ? { id: `a_${Date.now()}`, role: 'agent', content: <p className="text-[12px] leading-relaxed whitespace-pre-wrap">{data.reply}</p> }
+          : m
+      ));
+    } catch (err) {
+      if (session !== chatSessionRef.current) return;
+      setMessages(prev => prev.filter(m => m.id !== userMsgId && m.id !== pendingId));
+      setInput(prev => prev || currentInput);
+      setSendError(err instanceof Error ? err.message : 'Failed to send message. Please try again.');
+    } finally {
+      if (session === chatSessionRef.current) setIsSending(false);
+    }
+  };
+
+  const handleNewChat = () => {
+    chatSessionRef.current += 1;
+    setMessages([]);
+    setInput('');
+    setConversationId(null);
+    setSendError(null);
+    setIsSending(false);
+    setSearchParams({ tab: 'chat' });
+  };
+
   const handleSend = () => {
-    if (!input.trim()) return;
+    if (!input.trim() || isSending) return;
     
     const currentInput = input.trim();
     setInput('');
@@ -767,6 +846,11 @@ export default function Agent() {
     const isAssetTracking = isAssetReference && currentInput.length > 0;
     if (isDailyReview) setSavedTracking(Boolean(readLocalResult('tradingnote:tracking:2026-07-14')));
     if (isAssetTracking) setSavedTracking(Boolean(readLocalResult(`tradingnote:asset-tracking:${tradeId}`)));
+
+    if (tab === 'chat') {
+      void sendChatMessage(currentInput);
+      return;
+    }
 
     if (tab === 'backtest') {
       const btStep = searchParams.get('bt_step');
@@ -895,9 +979,17 @@ export default function Agent() {
               {searchParams.get('bt_step') === '3' && <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-rose-500 rounded-full border border-white"></span>}
             </button>
           ) : (
-            <button className="flex items-center gap-1 text-[#0B2545] text-[10px] font-bold px-2 py-1.5 bg-slate-100 rounded-lg active:bg-slate-200 transition-colors">
-              <History size={12} /> History
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={handleNewChat}
+                className="flex items-center gap-1 text-[#0B2545] text-[10px] font-bold px-2 py-1.5 bg-slate-100 rounded-lg active:bg-slate-200 transition-colors"
+              >
+                <MessageSquarePlus size={12} /> New Chat
+              </button>
+              <button className="flex items-center gap-1 text-[#0B2545] text-[10px] font-bold px-2 py-1.5 bg-slate-100 rounded-lg active:bg-slate-200 transition-colors">
+                <History size={12} /> History
+              </button>
+            </div>
           )}
         </div>
 
@@ -1026,6 +1118,16 @@ export default function Agent() {
             </div>
           )}
 
+          {tab === 'chat' && sendError && (
+            <div role="alert" className="flex items-start gap-1.5 mb-2 px-2.5 py-2 bg-rose-50 border border-rose-200 rounded-lg text-[11px] font-medium text-rose-700 leading-snug">
+              <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+              <span className="flex-1">{sendError}</span>
+              <button onClick={() => setSendError(null)} aria-label="Dismiss error" className="shrink-0 text-rose-400 active:text-rose-600">
+                <X size={12} />
+              </button>
+            </div>
+          )}
+
           <div className="flex items-end gap-2 bg-slate-50 rounded-xl p-1.5 border border-slate-200 focus-within:border-[#0B2545] transition-colors shadow-inner">
             <div className="p-2 text-slate-400 shrink-0 mb-0.5">
               <Sparkles size={16} />
@@ -1046,10 +1148,11 @@ export default function Agent() {
             </div>
             <button 
               onClick={handleSend}
-              disabled={!input.trim()}
+              disabled={!input.trim() || isSending}
+              aria-label={isSending ? 'Sending' : 'Send'}
               className="p-2.5 bg-[#EE6C4D] text-white rounded-lg disabled:bg-slate-300 disabled:text-white transition-colors shrink-0 shadow-sm active:scale-95 mb-0.5 mr-0.5"
             >
-              <Send size={16} />
+              {isSending ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
             </button>
           </div>
         </div>
