@@ -12,8 +12,30 @@ import {
 } from 'recharts';
 import { motion, AnimatePresence } from 'framer-motion';
 import { readLocalResult, saveLocalResult } from '../lib/saved-results';
+import { apiRequest } from '../lib/api';
 
-const AGENT_CHAT_URL = 'http://127.0.0.1:8000/api/agent/chat';
+type ConversationSummary = {
+  conversation_id: string;
+  title: string;
+  updated_at: string;
+  message_count: number;
+};
+
+type ConversationHistory = {
+  conversation_id: string;
+  messages: Array<{ role: 'user' | 'assistant'; content: string; created_at: string }>;
+};
+
+type AgentTradeContext = {
+  id?: string;
+  symbol: string;
+  type: 'Buy' | 'Sell';
+  price: number;
+  qty: number;
+  amount?: string | number;
+  motive?: { posTag?: string; tags?: string[]; desc?: string };
+  plan?: { tp?: string | number; sl?: string | number; desc?: string };
+};
 
 interface Message {
   id: string;
@@ -115,12 +137,22 @@ export default function Agent() {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyItems, setHistoryItems] = useState<ConversationSummary[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [loadingConversation, setLoadingConversation] = useState<string | null>(null);
   const chatSessionRef = useRef(0);
+  const skipNextRouteSyncRef = useRef(false);
   
   const navigate = useNavigate();
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (skipNextRouteSyncRef.current) {
+      skipNextRouteSyncRef.current = false;
+      return;
+    }
     if (tab === 'backtest') {
       const btStep = searchParams.get('bt_step');
       const strat = searchParams.get('strategy');
@@ -778,32 +810,47 @@ export default function Agent() {
     ]);
 
     try {
-      let res: Response;
-      try {
-        res = await fetch(AGENT_CHAT_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: currentInput,
-            conversation_id: conversationId,
-            action: action ?? null,
-            trade_id: tradeId ?? null,
-            step: step ?? null,
-            reference: reference ?? null,
-            asset: action === 'draft' || isAssetReference ? draftAsset : null,
-            symbol: searchParams.get('symbol'),
-            pnl: searchParams.get('pnl')
-          })
-        });
-      } catch {
-        throw new Error("Can't reach the Agent backend at 127.0.0.1:8000. Make sure it is running, then tap send to retry.");
+      let trade_context: AgentTradeContext | null = null;
+      if (tradeId) {
+        try {
+          const storedTrade = await apiRequest<AgentTradeContext>(`/api/trades/${encodeURIComponent(tradeId)}`);
+          if (storedTrade && (storedTrade.type === 'Buy' || storedTrade.type === 'Sell')) {
+            trade_context = {
+              id: storedTrade.id,
+              symbol: storedTrade.symbol,
+              type: storedTrade.type,
+              price: Number(storedTrade.price),
+              qty: Number(storedTrade.qty),
+              amount: storedTrade.amount,
+              motive: storedTrade.motive,
+              plan: storedTrade.plan,
+            };
+          }
+        } catch {
+          // A detail-page reference may not correspond to a persisted trade card.
+        }
       }
 
-      if (!res.ok) {
-        throw new Error(`Agent backend returned an error (HTTP ${res.status}). Please try again.`);
-      }
-
-      const data = await res.json().catch(() => null);
+      const data = await apiRequest<{ conversation_id: string; reply: string }>('/api/agent/chat', {
+        method: 'POST',
+        body: JSON.stringify({
+          message: currentInput,
+          conversation_id: conversationId,
+          action: action ?? null,
+          trade_id: tradeId ?? null,
+          step: step ?? null,
+          reference: reference ?? null,
+          asset: action === 'draft' || isAssetReference ? draftAsset : null,
+          symbol: searchParams.get('symbol'),
+          pnl: searchParams.get('pnl'),
+          trade_context,
+        }),
+      }).catch(error => {
+        if (error instanceof Error && error.message.startsWith('无法连接后端')) {
+          throw new Error("无法连接 Agent 后端，请确认后端已启动后重试。");
+        }
+        throw error;
+      });
       if (!data || typeof data.reply !== 'string') {
         throw new Error('Agent backend returned an unexpected response. Please try again.');
       }
@@ -835,6 +882,50 @@ export default function Agent() {
     setSendError(null);
     setIsSending(false);
     setSearchParams({ tab: 'chat' });
+  };
+
+  const openHistory = async () => {
+    setHistoryOpen(true);
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const items = await apiRequest<ConversationSummary[]>('/api/agent/conversations?limit=50');
+      setHistoryItems(items);
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : '历史对话加载失败。');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const restoreConversation = async (id: string) => {
+    setLoadingConversation(id);
+    setHistoryError(null);
+    try {
+      const history = await apiRequest<ConversationHistory>(`/api/agent/conversations/${encodeURIComponent(id)}`);
+      chatSessionRef.current += 1;
+      setIsSending(false);
+      setInput('');
+      setConversationId(history.conversation_id);
+      setMessages(history.messages.map((message, index) => ({
+        id: `${history.conversation_id}_${index}`,
+        role: message.role === 'assistant' ? 'agent' : 'user',
+        content: message.role === 'assistant'
+          ? <p className="text-[12px] leading-relaxed whitespace-pre-wrap">{message.content}</p>
+          : message.content,
+      })));
+      setSendError(null);
+      setHistoryOpen(false);
+      const cleanChatParams = new URLSearchParams({ tab: 'chat' });
+      if (searchParams.toString() !== cleanChatParams.toString()) {
+        skipNextRouteSyncRef.current = true;
+        setSearchParams(cleanChatParams);
+      }
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : '无法恢复这段对话，请重试。');
+    } finally {
+      setLoadingConversation(null);
+    }
   };
 
   const handleSend = () => {
@@ -986,7 +1077,7 @@ export default function Agent() {
               >
                 <MessageSquarePlus size={12} /> New Chat
               </button>
-              <button className="flex items-center gap-1 text-[#0B2545] text-[10px] font-bold px-2 py-1.5 bg-slate-100 rounded-lg active:bg-slate-200 transition-colors">
+              <button onClick={() => void openHistory()} className="flex items-center gap-1 text-[#0B2545] text-[10px] font-bold px-2 py-1.5 bg-slate-100 rounded-lg active:bg-slate-200 transition-colors">
                 <History size={12} /> History
               </button>
             </div>
@@ -1084,6 +1175,36 @@ export default function Agent() {
             </div>
           ))}
           <div ref={bottomRef} className="h-4" />
+        </div>
+      )}
+
+      {historyOpen && (
+        <div className="absolute inset-0 z-40 flex items-end bg-[#0B2545]/35 backdrop-blur-[1px]">
+          <section className="mx-auto flex h-[82%] w-full max-w-lg flex-col rounded-t-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+              <div>
+                <h2 className="text-[14px] font-bold text-[#0B2545]">对话历史</h2>
+                <p className="mt-0.5 text-[10px] text-slate-400">选择一条记录即可查看并继续对话</p>
+              </div>
+              <button onClick={() => setHistoryOpen(false)} aria-label="关闭对话历史" className="rounded-full bg-slate-100 p-2 text-slate-500"><X size={14} /></button>
+            </div>
+            {historyError && <div role="alert" className="mx-3 mt-3 rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-[11px] text-rose-700">{historyError}<button onClick={() => void openHistory()} className="ml-2 font-bold underline">重试</button></div>}
+            <div className="flex-1 overflow-y-auto p-3">
+              {historyLoading ? (
+                <div className="flex items-center justify-center gap-2 py-10 text-[11px] text-slate-400"><Loader2 size={14} className="animate-spin" />正在加载历史对话…</div>
+              ) : historyItems.length === 0 && !historyError ? (
+                <div className="py-10 text-center text-[11px] text-slate-400">还没有保存的对话</div>
+              ) : historyItems.map(item => (
+                <button key={item.conversation_id} onClick={() => void restoreConversation(item.conversation_id)} disabled={Boolean(loadingConversation)} className="mb-2 w-full rounded-xl border border-slate-200 p-3 text-left transition-colors hover:border-[#EE6C4D]/50 disabled:opacity-60">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="line-clamp-2 text-[12px] font-bold text-[#0B2545]">{item.title || '新对话'}</span>
+                    {loadingConversation === item.conversation_id && <Loader2 size={13} className="shrink-0 animate-spin text-[#EE6C4D]" />}
+                  </div>
+                  <div className="mt-1.5 flex justify-between text-[9px] text-slate-400"><span>{item.message_count} 条消息</span><span>{new Date(item.updated_at).toLocaleString()}</span></div>
+                </button>
+              ))}
+            </div>
+          </section>
         </div>
       )}
 

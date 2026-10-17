@@ -1,42 +1,67 @@
 import React, { useState, useEffect } from 'react';
-import { MessageCircle, Edit3, Plus, Target, Tag, Edit2 } from 'lucide-react';
+import { MessageCircle, Edit3, Plus, Target, Tag, Edit2, Trash2, Loader2, AlertTriangle } from 'lucide-react';
 import { cn } from '../lib/utils';
 import RecordDrawer from './RecordDrawer';
 import { useSearchParams } from 'react-router-dom';
 import { readLocalResult, SAVED_RESULTS_EVENT } from '../lib/saved-results';
+import { apiRequest } from '../lib/api';
 
 type SavedReview = { date: string; asset: string; summary: string };
 
-const INITIAL_TRADES = [
-  {
-    id: '1', time: '10:00', type: 'Sell', symbol: 'ZIJIN MINING', code: '601899', market: 'Stock',
-    price: '26.81', qty: '200', amount: '¥ 5,362.00', closeVsFill: '+0.52%', closeVsFillColor: 'text-emerald-500',
-    motive: { posTag: 'Close', tags: ['Target Hit', 'Trend'], desc: 'Close to my 27 target. Taking profit before the afternoon fade.' },
-    plan: { tp: '27.00', sl: '23.50', desc: 'Taking profit before the afternoon fade.' },
-    modifiedAt: ''
-  },
-  {
-    id: '2', time: '11:10', type: 'Sell', symbol: 'ZIJIN INTL', code: '02259', market: 'Stock',
-    price: '94.00', qty: '100', amount: '¥ 9,400.00', closeVsFill: '-1.49%', closeVsFillColor: 'text-rose-500',
-    motive: { posTag: 'Stop Loss', tags: ['Support Break'], desc: 'Gold dipping with the market. Hit my 94 stop. Out.' },
-    plan: { tp: '110.00', sl: '94.00', desc: 'Strict stop loss at 94.' },
-    modifiedAt: ''
-  },
-  {
-    id: '3', time: '14:30', type: 'Sell', symbol: 'JEREH', code: '002353', market: 'Stock',
-    price: '140.00', qty: '100', amount: '¥ 14,000.00', closeVsFill: '-0.79%', closeVsFillColor: 'text-rose-500',
-    motive: { posTag: 'Close', tags: ['Error Fix', 'Stop Loss'], desc: 'Short-term logic broke after a failed intraday bounce. Exiting, no averaging down.' },
-    plan: { tp: '170.00', sl: '145.00', desc: 'Short-term logic broke. Exiting, no averaging down.' },
-    modifiedAt: ''
-  }
-];
+type TradeRecord = {
+  id: string;
+  time?: string;
+  type: 'Buy' | 'Sell';
+  symbol: string;
+  code?: string;
+  market?: string;
+  price: number | string;
+  qty: number | string;
+  amount?: number | string;
+  closeVsFill?: string;
+  closeVsFillColor?: string;
+  motive?: { posTag?: string; tags?: string[]; desc?: string };
+  plan?: { tp?: number | string; sl?: number | string; desc?: string };
+  modifiedAt?: string;
+};
+
+const normalizeTrade = (trade: TradeRecord): TradeRecord => ({
+  ...trade,
+  code: trade.code || '',
+  amount: trade.amount ?? Number(trade.price) * Number(trade.qty),
+  motive: { ...trade.motive, tags: trade.motive?.tags || [] },
+  plan: trade.plan || {},
+});
+
+const formatAmount = (amount: number | string | undefined) => {
+  const value = Number(amount);
+  return Number.isFinite(value) ? `¥ ${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '--';
+};
 
 export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
-  const [trades, setTrades] = useState(INITIAL_TRADES);
+  const [trades, setTrades] = useState<TradeRecord[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [mutationError, setMutationError] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingTrade, setEditingTrade] = useState<any>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const [savedReviews, setSavedReviews] = useState<Record<string, SavedReview | null>>({});
+
+  const loadTrades = async () => {
+    setIsLoading(true);
+    setLoadError(null);
+    try {
+      const records = await apiRequest<TradeRecord[]>('/api/trades');
+      setTrades(records.map(normalizeTrade));
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : '交易记录加载失败。');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => { void loadTrades(); }, []);
 
   useEffect(() => {
     const sync = () => setSavedReviews({
@@ -50,7 +75,15 @@ export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
   useEffect(() => {
     const action = searchParams.get('trade_action');
     if (action === 'edit') {
-      setEditingTrade(trades[2] || trades[0]); // target JEREH for demo
+      if (isLoading) return;
+      const requestedTrade = searchParams.get('trade_id');
+      const selectedTrade = trades.find(trade => trade.id === requestedTrade) || (!requestedTrade ? trades[0] : null);
+      if (!selectedTrade) {
+        setEditingTrade(null);
+        setDrawerOpen(false);
+        return;
+      }
+      setEditingTrade(selectedTrade);
       setDrawerOpen(true);
     } else if (action === 'add' || action === 'add_ocr') {
       setEditingTrade(null);
@@ -58,13 +91,14 @@ export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
     } else {
       setDrawerOpen(false);
     }
-  }, [searchParams]);
+  }, [searchParams, trades, isLoading]);
 
   const handleEdit = (trade: any) => {
     setEditingTrade(trade);
     setDrawerOpen(true);
     const next = new URLSearchParams(searchParams);
     next.set('trade_action', 'edit');
+    next.set('trade_id', trade.id);
     setSearchParams(next);
   };
 
@@ -73,6 +107,7 @@ export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
     setDrawerOpen(true);
     const next = new URLSearchParams(searchParams);
     next.set('trade_action', 'add');
+    next.delete('trade_id');
     setSearchParams(next);
   };
 
@@ -80,30 +115,54 @@ export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
     setDrawerOpen(false);
     const next = new URLSearchParams(searchParams);
     next.delete('trade_action');
+    next.delete('trade_id');
     setSearchParams(next);
   };
 
-  const handleSave = (data: any) => {
-    if (editingTrade) {
-      setTrades(trades.map(t => t.id === editingTrade.id ? {
-        ...t,
-        symbol: data.symbol, price: data.price, qty: data.qty,
-        motive: { posTag: data.posTag, tags: data.tags, desc: data.motiveDesc },
-        plan: { tp: data.tp, sl: data.sl, desc: data.planDesc },
-        modifiedAt: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
-      } : t));
-    } else {
-      setTrades([{
-        id: Date.now().toString(),
-        time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
-        type: data.direction,
-        symbol: data.symbol || 'NEW STOCK', code: '000000', market: 'Stock',
-        price: data.price, qty: data.qty, amount: `¥ ${(Number(data.price || 0)*Number(data.qty || 0)).toFixed(2)}`,
-        closeVsFill: '0.00%', closeVsFillColor: 'text-slate-500',
-        motive: { posTag: data.posTag, tags: data.tags, desc: data.motiveDesc },
-        plan: { tp: data.tp, sl: data.sl, desc: data.planDesc },
-        modifiedAt: ''
-      }, ...trades]);
+  const handleSave = async (data: any) => {
+    setMutationError(null);
+    const amount = Number(data.price) * Number(data.qty);
+    const payload: Omit<TradeRecord, 'id'> = {
+      ...(editingTrade || {}),
+      time: editingTrade?.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      type: data.direction,
+      symbol: data.symbol,
+      code: data.code || undefined,
+      market: editingTrade?.market || 'Stock',
+      price: Number(data.price),
+      qty: Number(data.qty),
+      amount,
+      closeVsFill: editingTrade?.closeVsFill || '--',
+      closeVsFillColor: editingTrade?.closeVsFillColor || 'text-slate-400',
+      motive: { posTag: data.posTag, tags: data.tags, desc: data.motiveDesc },
+      plan: { tp: data.tp || undefined, sl: data.sl || undefined, desc: data.planDesc },
+      modifiedAt: editingTrade ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
+    };
+
+    try {
+      const saved = editingTrade
+        ? await apiRequest<TradeRecord>(`/api/trades/${encodeURIComponent(editingTrade.id)}`, { method: 'PUT', body: JSON.stringify(payload) })
+        : await apiRequest<TradeRecord>('/api/trades', { method: 'POST', body: JSON.stringify(payload) });
+      const normalized = normalizeTrade(saved);
+      setTrades(current => editingTrade
+        ? current.map(trade => trade.id === editingTrade.id ? normalized : trade)
+        : [normalized, ...current]);
+      if (!editingTrade) closeDrawer();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '交易记录保存失败。';
+      setMutationError(message);
+      throw error;
+    }
+  };
+
+  const handleDelete = async (trade: TradeRecord) => {
+    if (!window.confirm(`删除 ${trade.symbol} 这条交易记录？`)) return;
+    setMutationError(null);
+    try {
+      await apiRequest<void>(`/api/trades/${encodeURIComponent(trade.id)}`, { method: 'DELETE' });
+      setTrades(current => current.filter(item => item.id !== trade.id));
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : '交易记录删除失败。');
     }
   };
 
@@ -128,7 +187,22 @@ export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
         </div>
       </div>
 
-      <div className="relative pl-12 space-y-6 before:absolute before:left-[43px] before:top-2 before:bottom-0 before:w-px before:bg-slate-200">
+      {loadError && (
+        <div role="alert" className="mb-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-[11px] text-rose-700">
+          <div className="flex items-start gap-2"><AlertTriangle size={14} className="mt-0.5 shrink-0" /><span className="flex-1">{loadError}</span></div>
+          <button onClick={() => void loadTrades()} className="mt-2 font-bold underline">重试加载</button>
+        </div>
+      )}
+      {mutationError && <p role="alert" className="mb-3 rounded-lg border border-rose-200 bg-rose-50 p-2 text-[11px] text-rose-700">{mutationError}</p>}
+      {isLoading ? (
+        <div className="flex items-center justify-center gap-2 py-10 text-[12px] text-slate-400"><Loader2 size={15} className="animate-spin" />正在加载交易记录…</div>
+      ) : loadError ? null : trades.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
+          <p className="text-[13px] font-bold text-[#0B2545]">还没有交易记录</p>
+          <p className="mt-1 text-[11px] text-slate-500">添加第一笔记录后，它会保存在后端账本中。</p>
+          <button onClick={handleAdd} className="mt-3 rounded-lg bg-[#EE6C4D] px-3 py-2 text-[11px] font-bold text-white"><Plus size={12} className="mr-1 inline" />新增交易</button>
+        </div>
+      ) : <div className="relative pl-12 space-y-6 before:absolute before:left-[43px] before:top-2 before:bottom-0 before:w-px before:bg-slate-200">
         {trades.map(trade => (
           <div key={trade.id} className="relative">
             <div className="absolute -left-[43px] top-0 text-[12px] font-bold font-mono text-[#0B2545]">{trade.time}</div>
@@ -139,11 +213,12 @@ export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
                 <div className="flex items-center gap-2">
                   <span className={cn("px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border", trade.type === 'Buy' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-rose-50 text-rose-600 border-rose-200")}>{trade.type}</span>
                   <span className="font-bold text-[#0B2545] text-[14px]">{trade.symbol}</span>
-                  <span className="text-[10px] text-slate-400 font-mono">{trade.code}</span>
+                  {trade.code && <span className="text-[10px] text-slate-400 font-mono">{trade.code}</span>}
                 </div>
-                <button onClick={() => handleEdit(trade)} className="text-slate-400 hover:text-[#EE6C4D] active:scale-95 p-1 transition-all">
-                  <Edit2 size={12} />
-                </button>
+                <div className="flex items-center gap-1">
+                  <button onClick={() => handleEdit(trade)} aria-label="编辑交易记录" className="text-slate-400 hover:text-[#EE6C4D] active:scale-95 p-1 transition-all"><Edit2 size={12} /></button>
+                  <button onClick={() => void handleDelete(trade)} aria-label="删除交易记录" className="text-slate-400 hover:text-rose-600 active:scale-95 p-1 transition-all"><Trash2 size={12} /></button>
+                </div>
               </div>
               
               <div className="grid grid-cols-3 gap-2 mb-3 border-b border-slate-100 pb-3">
@@ -153,11 +228,11 @@ export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
                 </div>
                 <div>
                   <div className="text-[9px] text-slate-400 uppercase font-bold tracking-wider mb-0.5">Amount</div>
-                  <div className="text-[#0B2545] font-bold font-mono text-[12px]">{trade.amount}</div>
+                  <div className="text-[#0B2545] font-bold font-mono text-[12px]">{formatAmount(trade.amount)}</div>
                 </div>
                 <div className="text-right">
                   <div className="text-[9px] text-slate-400 uppercase font-bold tracking-wider mb-0.5">Close vs Fill</div>
-                  <div className={cn("font-bold font-mono text-[12px]", trade.closeVsFillColor)}>{trade.closeVsFill}</div>
+                  <div className={cn("font-bold font-mono text-[12px]", trade.closeVsFillColor || 'text-slate-400')}>{trade.closeVsFill || '--'}</div>
                 </div>
               </div>
               
@@ -174,26 +249,26 @@ export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
                 </div>
                 
                 <div className="flex flex-wrap gap-1.5 mb-2.5">
-                  {trade.motive.tags.map((t: string) => (
+                  {trade.motive?.tags?.map((t: string) => (
                     <span key={t} className="bg-white border border-slate-200 text-slate-600 px-1.5 py-0.5 rounded text-[9px] font-bold shadow-sm">{t}</span>
                   ))}
                 </div>
                 
-                {trade.motive.desc && (
+                {trade.motive?.desc && (
                   <p className="text-[11px] text-slate-600 leading-relaxed font-medium mb-2.5">
                     {trade.motive.desc}
                   </p>
                 )}
                 
-                {((trade.plan.tp && Number(trade.plan.tp) > 0) || (trade.plan.sl && Number(trade.plan.sl) > 0)) && (
+                {((trade.plan?.tp && Number(trade.plan.tp) > 0) || (trade.plan?.sl && Number(trade.plan.sl) > 0)) && (
                   <div className="flex items-center gap-3 mb-2 text-[9px] text-slate-500 font-medium">
-                    {trade.plan.tp && Number(trade.plan.tp) > 0 && (
+                    {trade.plan?.tp && Number(trade.plan.tp) > 0 && (
                       <div className="flex items-center gap-1">
                         <span className="uppercase tracking-wider">TP</span>
                         <span className="font-mono text-slate-600">{Number(trade.plan.tp).toFixed(2)}</span>
                       </div>
                     )}
-                    {trade.plan.sl && Number(trade.plan.sl) > 0 && (
+                    {trade.plan?.sl && Number(trade.plan.sl) > 0 && (
                       <div className="flex items-center gap-1">
                         <span className="uppercase tracking-wider">SL</span>
                         <span className="font-mono text-slate-600">{Number(trade.plan.sl).toFixed(2)}</span>
@@ -202,7 +277,7 @@ export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
                   </div>
                 )}
                 
-                {trade.plan.desc && (
+                {trade.plan?.desc && (
                   <p className="text-[10px] text-slate-500 leading-relaxed italic border-l-2 border-slate-200 pl-2">
                     {trade.plan.desc}
                   </p>
@@ -220,7 +295,7 @@ export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
             </div>
           </div>
         ))}
-      </div>
+      </div>}
 
       <RecordDrawer 
         isOpen={drawerOpen} 
@@ -228,13 +303,6 @@ export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
         initialData={editingTrade} 
         onSave={handleSave} 
         defaultTab={searchParams.get('trade_action') === 'add_ocr' ? 'ocr' : 'manual'}
-        onUploadSuccess={() => {
-          closeDrawer();
-          const next = new URLSearchParams(searchParams);
-          next.delete('trade_action');
-          next.set('upload', 'success');
-          setSearchParams(next);
-        }}
       />
     </Wrapper>
   );

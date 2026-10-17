@@ -2,14 +2,14 @@
 
 这份清单记录 demo 前端接入后端时需要完成的事项，并明确当前接口使用的字段。
 
-## 与曾的最新前端对齐（`zjj_version`：`8d362bd`）
+## 前端字段基线（`zjj_version`：`8d362bd`）
 
 - `TradesModule` 的记录对象字段与后端一致：`id`、`time`、`type`（Buy/Sell）、`symbol`、`code`、`market`、`price`、`qty`、`amount`、`closeVsFill`、`closeVsFillColor`、`motive`、`plan`、`modifiedAt`。
-- `RecordDrawer` 保存表单字段为 `symbol`、`direction`、`price`、`qty`、`posTag`、`tags`、`tp`、`sl`、`planDesc`、`motiveDesc`；`TradesModule` 再把 `direction` 转为记录里的 `type`，把标签和说明装进 `motive`，把止盈止损装进 `plan`。这和后端当前存储形状一致。
-- `RecordDrawer` 的证券输入目前是一个 `symbol`（可填代码或名称），但新增记录时 `TradesModule` 把 `code` 写死为 `000000`。后端把这个占位值转为空，避免拿占位代码请求行情；要让新交易参与 A 股行情分析，前端之后需把真实证券代码单独保存到 `code`。
+- `RecordDrawer` 保存表单字段为 `symbol`、可选 `code`、`direction`、`price`、`qty`、`posTag`、`tags`、`tp`、`sl`、`planDesc`、`motiveDesc`；`TradesModule` 把 `direction` 转为记录里的 `type`，把标签和说明装进 `motive`，把止盈止损装进 `plan`。
+- `symbol` 保留为展示名称或代码；可选 `code` 只接受用户填写的六位 A 股代码，不根据名称推断。空值不传给后端，不再写入 `000000` 占位值。
 - 前端七个内置 tag 的实际值带空格：`Stop Loss`、`Take Profit`、`Trend`、`Support Break`、`No Logic`、`Error Fix`、`Market Dip`。`zjj_version` 的 RecordDrawer 已支持创建、选择和移除自定义 tag；后端 `motive.tags` 接收这些字符串值。
 - Detail 页 Tracking 使用 `direction`、`shares`、`buyPrice`、`currentPrice`、`plan.target/stopLoss/desc`、`timeline`。后端 `/api/tracking/analyze` 接收这一形状，保留五个 `analysis` 字段，同时增加与最新前端保存模型一致的 `tracking.asset`、`overallSummary`、`pnlResult`、`processResult`、`lessonsLearned`、`savedAt`；前端 Generate 按钮仍未发起该请求。
-- Agent 普通聊天前端已在当前开发分支连接 `/api/agent/chat`；请求的 `message`、`conversation_id`、`action`、`trade_id`、`step`、`reference`、`asset`、`symbol`、`pnl` 和响应的 `conversation_id`、`reply` 与后端匹配。交易/每日复盘入口携带的 reference、symbol 和 PnL 是页面上下文，不能当成经过账本验证的数据。History 按钮仍未接入历史接口。
+- Agent 普通聊天前端连接 `/api/agent/chat`，请求和响应字段与后端匹配；History 已接入对话列表与详情接口。仅当交易 ID 能从后端账本读取时，才附带交易卡片形状的 `trade_context`。页面 reference、symbol 和 PnL 仍只是上下文，不能当成经过账本验证的数据。
 
 ## 已有接口
 
@@ -46,7 +46,7 @@
 2. **交易记录持久化**：`TradesModule.tsx` 以 `/api/trades` 的 GET/POST/PUT/DELETE 替换本地 demo CRUD；确认空库首次打开时的展示方式。
 3. **Agent 交易上下文**：聊天请求除 `trade_id`、页面 `reference`、`symbol`、展示用 `pnl` 外，尽量附上完整交易记录。Agent 的 `trade_context` 使用交易卡片形状（`type`、`price`、`qty`、`motive`、`plan.tp/sl/desc`），与 Tracking 的详情形状（`direction`、`shares`、`buyPrice/currentPrice`、`plan.target/stopLoss/desc`、`timeline`）不同，不能把 Tracking 对象原样传给 Agent。
 4. **Agent 历史**：History 页面接 `GET /api/agent/conversations` 和 `GET /api/agent/conversations/{conversation_id}`，实现列表、选择和恢复。
-5. **真实证券代码**：录入表单需把证券代码单独存入 `code`；目前新增交易将 `code` 写成 `000000`，后端会将它视为空，因此不能据此拉取 A 股历史行情。建议 `symbol` 继续作为展示名称/代码，另加可选的 A 股 6 位 `code` 输入；不猜测代码，非 A 股可留空。
+5. **真实证券代码**：录入表单已把可选的 A 股六位代码单独存入 `code`；`symbol` 继续作为展示名称/代码，不根据名称猜代码，非 A 股可留空。
 6. **API 地址与跨域**：统一从 `VITE_API_BASE_URL` 读取后端地址；本机以 `http://127.0.0.1:8000` 为默认值。后端已允许本地 Vite 的 `517x` 端口；部署前端需在后端 `FRONTEND_ORIGINS` 中配置正式来源。手机访问时不能继续用访问者本机的 `127.0.0.1`。
 
 - 自定义 tag 已在 `zjj_version` 前端实现，后端接受 `motive.tags: string[]`，此项完成。
@@ -55,15 +55,15 @@
 - [ ] 在 `Detail.tsx` 调用 `POST /api/tracking/analyze`，把当前详情数据传入 `trade_context`；用返回的 `analysis` 替换页面硬编码的分析文字。
 - [ ] Tracking 区域增加加载中、请求失败后重试和行情缺失提示；有行情时展示 `market_data.source`、`market_data.as_of`，不要把日线显示成实时价。
 - [ ] Tracking 展示行情时说明数据来源，并使用 `is_realtime` 和 `frequency` 表达日线历史数据，避免让用户误认为实时行情。
-- [ ] Agent 在交易卡片上下文可用后附带符合 Agent schema 的 `trade_context`；不要直接发送 Tracking 的详情 schema。
-- [ ] 把 Agent 页 History 按钮接到 `GET /api/agent/conversations` 和 `GET /api/agent/conversations/{conversation_id}`，实现列表、选择和恢复对话。
+- [x] Agent 在交易卡片上下文可用后附带符合 Agent schema 的 `trade_context`；不要直接发送 Tracking 的详情 schema。
+- [x] 把 Agent 页 History 按钮接到 `GET /api/agent/conversations` 和 `GET /api/agent/conversations/{conversation_id}`，实现列表、选择和恢复对话。
 - [x] `RecordDrawer.tsx` 已支持自定义 tag 输入、创建、选择和移除；系统建议 tag 与自定义 tag 都保存在 `motive.tags: string[]`。
-- [ ] 统一交易方向字段：录入表单的 `direction` 当前在 `TradesModule` 保存成 `type`；详情页当前使用 `direction`。两者值都是 `Buy` / `Sell`，调用各接口时沿用对应页面已有字段。
-- [ ] 为 `127.0.0.1:8000` 增加可配置的 API base URL。部署到其他电脑或手机访问时，`127.0.0.1` 会指向访问者自己的设备。
+- [x] 交易录入表单的 `direction` 映射为记录接口的 `type`；Tracking 详情仍使用自己的 `direction` 字段。
+- [x] 为 `127.0.0.1:8000` 增加可配置的 API base URL。部署到其他电脑或手机访问时，`127.0.0.1` 会指向访问者自己的设备。
 
-## 仍需后端工作
+## 交易记录接入状态与后续后端事项
 
-- [ ] 在 `TradesModule.tsx` 用 `GET /api/trades` 加载记录，新增用 `POST`、编辑用 `PUT`、删除用 `DELETE`；需决定空数据库时如何展示三条 demo 初始记录。
+- [x] 在 `TradesModule.tsx` 用 `GET /api/trades` 加载记录，新增用 `POST`、编辑用 `PUT`、删除用 `DELETE`；空数据库显示空状态和新增入口，不加载 demo 初始记录。
 - [ ] 如比赛需要非 A 股或实时行情，为港股、美股、债券、加密资产分别确定数据源、授权、币种和更新时间，并统一成页面需要的行情响应。
 - [ ] Tracking 多次分批买入/卖出的盈亏核算需要按完整成交序列处理；当前接口返回的是简化估算，展示前需与真实账本字段核对。
 

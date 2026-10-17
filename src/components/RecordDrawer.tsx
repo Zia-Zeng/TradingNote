@@ -1,19 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Search, Tag, Target, Loader2, Image as ImageIcon, CheckCircle2, Plus, Trash2 } from 'lucide-react';
+import { X, Search, Tag, Target, Image as ImageIcon, CheckCircle2, Plus, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 interface RecordDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   initialData?: any;
-  onSave?: (data: any) => void;
-  onUploadSuccess?: () => void;
+  onSave?: (data: any) => void | Promise<void>;
   defaultTab?: 'manual' | 'ocr';
 }
 
-export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onUploadSuccess, defaultTab = 'manual' }: RecordDrawerProps) {
+export default function RecordDrawer({ isOpen, onClose, initialData, onSave, defaultTab = 'manual' }: RecordDrawerProps) {
   const buyMotiveOptions = ['Breakout Confirmation', 'Pullback Entry', 'Support Bounce', 'Trend Continuation', 'Catalyst', 'Re-entry'];
   const sellMotiveOptions = ['Take Profit', 'Stop Loss', 'Resistance Rejection', 'Trend Reversal', 'Risk Reduction', 'Thesis Invalidated'];
   const [isAddingTag, setIsAddingTag] = useState(false);
@@ -23,11 +22,13 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onU
     catch { return { Buy: [], Sell: [] }; }
   });
   const [activeTab, setActiveTab] = useState<'manual' | 'ocr'>(defaultTab);
-  const [isUploading, setIsUploading] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Form state
   const [symbol, setSymbol] = useState('');
+  const [code, setCode] = useState('');
   const [direction, setDirection] = useState<'Buy' | 'Sell'>('Buy');
   const [price, setPrice] = useState('');
   const [qty, setQty] = useState('');
@@ -43,6 +44,7 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onU
   useEffect(() => {
     if (initialData) {
       setSymbol(initialData.symbol || '');
+      setCode(initialData.code || '');
       setDirection(initialData.type === 'Sell' ? 'Sell' : 'Buy');
       setPrice(initialData.price || '');
       setQty(initialData.qty || '');
@@ -57,7 +59,7 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onU
       setMotiveDesc(initialData.motive?.desc || '');
       setActiveTab('manual');
     } else {
-      setSymbol(''); setPrice(''); setQty(''); setTags([]); setCustomTags([]); setNewTag('');
+      setSymbol(''); setCode(''); setPrice(''); setQty(''); setTags([]); setCustomTags([]); setNewTag('');
       setTp(''); setSl(''); setPlanDesc(''); setMotiveDesc(''); setPosTag('Close'); setDirection('Buy');
       setActiveTab(defaultTab);
     }
@@ -96,31 +98,30 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onU
     setTags([]);
   };
 
-  const handleSave = () => {
-    const data = {
-      symbol, direction, price, qty, posTag, tags, tp, sl, planDesc, motiveDesc
-    };
-    if (onSave) onSave(data);
-    
-    if (initialData) {
-      onClose();
-    } else {
-      setShowSuccess(true);
-      setTimeout(() => setShowSuccess(false), 2000);
-      setSymbol(''); setPrice(''); setQty(''); setTp(''); setSl(''); setPlanDesc(''); setMotiveDesc('');
+  const handleSave = async () => {
+    setSaveError(null);
+    if (code && !/^\d{6}$/.test(code)) {
+      setSaveError('A 股代码请填写 6 位数字；不确定时可以留空。');
+      return;
     }
-  };
-
-  const handleUpload = () => {
-    setIsUploading(true);
-    setTimeout(() => {
-      setIsUploading(false);
-      if (onUploadSuccess) {
-        onUploadSuccess();
-      } else {
+    const data = {
+      symbol, code: code || undefined, direction, price, qty, posTag, tags, tp, sl, planDesc, motiveDesc
+    };
+    setIsSaving(true);
+    try {
+      if (onSave) await onSave(data);
+      if (initialData) {
         onClose();
+      } else {
+        setShowSuccess(true);
+        setTimeout(() => setShowSuccess(false), 2000);
+        setSymbol(''); setCode(''); setPrice(''); setQty(''); setTp(''); setSl(''); setPlanDesc(''); setMotiveDesc('');
       }
-    }, 1500);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : '保存失败，请重试。');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const drawerContent = (
@@ -180,6 +181,17 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onU
                         value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())}
                         placeholder="Search stock code / name"
                         className="flex-1 bg-transparent text-[14px] font-bold text-[#0B2545] focus:outline-none placeholder:text-slate-300 font-mono"
+                      />
+                    </div>
+                    <div className="mb-3">
+                      <label className="mb-1 block text-[9px] font-bold uppercase tracking-wider text-slate-400">A 股代码（可选）</label>
+                      <input
+                        value={code}
+                        onChange={event => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                        inputMode="numeric"
+                        maxLength={6}
+                        placeholder="6 位代码；不确定时留空"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 font-mono text-[12px] text-[#0B2545] placeholder:text-slate-300 focus:border-[#EE6C4D] focus:outline-none"
                       />
                     </div>
                     <div className="flex items-center gap-2 mb-3">
@@ -268,21 +280,10 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onU
                 </div>
               ) : (
                 <div className="flex-1 flex flex-col items-center justify-center p-6 h-full mt-10">
-                  <div
-                    onClick={handleUpload}
-                    className="w-full border-2 border-dashed border-[#EE6C4D]/40 bg-[#EE6C4D]/5 rounded-2xl flex flex-col items-center justify-center py-12 cursor-pointer hover:bg-[#EE6C4D]/10 transition-colors"
-                  >
-                    {isUploading ? (
-                      <Loader2 size={32} className="text-[#EE6C4D] animate-spin mb-3" />
-                    ) : (
-                      <ImageIcon size={32} className="text-[#EE6C4D] mb-3" />
-                    )}
-                    <div className="text-[14px] font-bold text-[#0B2545] mb-1">
-                      {isUploading ? "Extracting Trades..." : "Tap to Upload Screenshot"}
-                    </div>
-                    <div className="text-[11px] text-slate-500 text-center max-w-[80%]">
-                      Supports brokerage app screenshots (Future Assets, EastMoney, etc.)
-                    </div>
+                  <div className="w-full rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 py-12 text-center">
+                    <ImageIcon size={32} className="mx-auto mb-3 text-slate-300" />
+                    <div className="mb-1 text-[14px] font-bold text-slate-500">OCR 导入暂未接入</div>
+                    <div className="mx-auto max-w-[80%] text-[11px] text-slate-400">请先使用手动录入，避免上传后没有真实识别结果。</div>
                   </div>
                 </div>
               )}
@@ -300,12 +301,13 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onU
                     </motion.div>
                   )}
                 </AnimatePresence>
+                {saveError && <p role="alert" className="mb-2 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-[10px] text-rose-700">{saveError}</p>}
                 <button 
                   onClick={handleSave} 
-                  disabled={!symbol}
+                  disabled={!symbol.trim() || !price || Number(price) <= 0 || !qty || Number(qty) <= 0 || isSaving}
                   className="w-full bg-[#0B2545] disabled:bg-slate-300 text-white rounded-lg py-3 font-bold text-[14px] shadow-sm active:bg-[#134074] transition-colors"
                 >
-                  {initialData ? 'Update Record' : 'Save & Continue'}
+                  {isSaving ? 'Saving…' : initialData ? 'Update Record' : 'Save Record'}
                 </button>
               </div>
             )}
