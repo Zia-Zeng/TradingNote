@@ -13,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from openai import AsyncOpenAI, OpenAIError
 from pydantic import BaseModel, Field, field_validator
 from .market_data import fetch_a_share_history
+from .today import router as today_router
+from .stocks import router as stocks_router
 from .storage import (
     get_conversation,
     get_recent_model_messages,
@@ -61,6 +63,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(today_router)
+app.include_router(stocks_router)
+
 MAX_HISTORY_MESSAGES = 12
 
 
@@ -87,7 +92,11 @@ class TradeContext(BaseModel):
     """A trade record supplied by the frontend for review or planning."""
 
     id: str | None = None
-    symbol: str = Field(min_length=1, max_length=32)
+    symbol: str = Field(min_length=1, max_length=80)
+    code: str | None = Field(default=None, max_length=32)
+    market: str | None = Field(default=None, max_length=32)
+    asset_class: str | None = Field(default="Stock", max_length=32)
+    currency: str | None = Field(default="CNY", min_length=3, max_length=8)
     type: Literal["Buy", "Sell"]
     price: float = Field(gt=0)
     qty: float = Field(gt=0)
@@ -103,8 +112,10 @@ class TradeRecord(BaseModel):
     time: str | None = Field(default=None, max_length=40)
     type: Literal["Buy", "Sell"]
     symbol: str = Field(min_length=1, max_length=80)
-    code: str | None = Field(default=None, max_length=16)
-    market: str | None = Field(default="Stock", max_length=32)
+    code: str | None = Field(default=None, max_length=32)
+    market: str | None = Field(default="CN", max_length=32)
+    asset_class: str = Field(default="Stock", max_length=32)
+    currency: str = Field(default="CNY", min_length=3, max_length=8, pattern=r"^[A-Za-z]{3,8}$")
     price: float = Field(gt=0)
     qty: float = Field(gt=0)
     amount: str | float | None = None
@@ -175,8 +186,10 @@ class TrackingTradeContext(BaseModel):
 
     id: str
     symbol: str = Field(min_length=1, max_length=80)
-    code: str | None = Field(default=None, max_length=16)
+    code: str | None = Field(default=None, max_length=32)
     market: str | None = Field(default=None, max_length=32)
+    asset_class: str | None = Field(default="Stock", max_length=32)
+    currency: str | None = Field(default="CNY", min_length=3, max_length=8)
     direction: Literal["Buy", "Sell"]
     status: str | None = Field(default=None, max_length=32)
     time: str | None = Field(default=None, max_length=40)
@@ -267,6 +280,10 @@ def trades() -> list[dict[str, Any]]:
 
 @app.post("/api/trades", response_model=TradeRecord, status_code=status.HTTP_201_CREATED)
 def add_trade(payload: TradeRecord) -> dict[str, Any]:
+    try:
+        date.fromisoformat((payload.time or "")[:10])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Trade date is required; time of day is optional.") from exc
     trade = payload.model_dump(exclude_none=True, mode="json")
     trade["id"] = payload.id or str(uuid4())
     try:
