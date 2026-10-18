@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { 
   ChevronLeft, MoreHorizontal,
-  BotMessageSquare, Target, Zap, Sparkles, MessageCircle, Tag, Edit2
+  BotMessageSquare, Target, Zap, Sparkles, MessageCircle, Tag, Edit2, Loader2, AlertTriangle
 } from 'lucide-react';
 import { ComposedChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, ReferenceLine, Scatter, Brush } from 'recharts';
 import { cn } from '../lib/utils';
@@ -10,7 +10,24 @@ import { readLocalResult, saveLocalResult, SAVED_RESULTS_EVENT } from '../lib/sa
 import RecordDrawer from '../components/RecordDrawer';
 
 type SavedPlan = { asset: string; entryZone: string; stopLoss: string; target: string; rule: string };
-type SavedAssetTracking = { asset: string; overallSummary: string; pnlResult: string; processResult: string; lessonsLearned: string; savedAt: string };
+type TrackingMarketData = { available: boolean; source: string | null; as_of: string | null; latest_close: number | null; is_realtime: boolean; frequency: string | null };
+type SavedAssetTracking = {
+  asset: string; overallSummary: string; pnlResult: string; processResult: string; lessonsLearned: string; savedAt: string;
+  generatedBy?: 'ai-tracking';
+  marketData?: TrackingMarketData;
+};
+
+const API_BASE_URL = ((import.meta.env.VITE_API_BASE_URL as string | undefined) || 'http://127.0.0.1:8000').replace(/\/+$/, '');
+const ANALYSIS_FIELDS = ['pnl', 'execution', 'deviation', 'comprehensive', 'suggestion'] as const;
+
+const toPositiveNumber = (value: unknown): number | undefined => {
+  if (value === null || value === undefined || value === '') return undefined;
+  const num = typeof value === 'number' ? value : Number(String(value).replace(/,/g, ''));
+  return Number.isFinite(num) && num > 0 ? num : undefined;
+};
+
+const optionalText = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
 const BuyMarker = (props: any) => {
   const { cx, cy, payload } = props;
@@ -56,6 +73,42 @@ type TimelineItem = {
 type TradeDetail = {
   timeline: TimelineItem[];
   [key: string]: any;
+};
+
+const toTrackingTimeline = (items: TimelineItem[]) => items.map(item => {
+  const tp = toPositiveNumber(item.plan?.tp);
+  const sl = toPositiveNumber(item.plan?.sl);
+  const planDesc = optionalText(item.plan?.desc);
+  return {
+    id: item.id,
+    type: item.type,
+    action: item.action,
+    date: item.date,
+    price: toPositiveNumber(item.price),
+    qty: toPositiveNumber(item.qty),
+    amount: optionalText(item.amount),
+    fees: optionalText(item.fees),
+    text: optionalText(item.text),
+    closeVsFill: optionalText(item.closeVsFill),
+    motive: item.motive,
+    plan: tp !== undefined || sl !== undefined || planDesc ? { tp, sl, desc: planDesc } : undefined,
+    aiPlan: item.aiPlan
+  };
+});
+
+const describeMarketData = (market: TrackingMarketData) => {
+  if (!market.available) {
+    return 'Market data unavailable — this analysis only uses the trade records and plan you provided.';
+  }
+  const kind = market.is_realtime
+    ? 'real-time quote'
+    : `historical ${!market.frequency || market.frequency === 'daily' ? 'daily bars' : `${market.frequency} bars`} (not real-time)`;
+  return [
+    `Market data: ${market.source || 'unknown source'}`,
+    kind,
+    market.as_of ? `as of ${market.as_of}` : null,
+    market.latest_close !== null ? `close ${market.latest_close}` : null
+  ].filter(Boolean).join(' · ');
 };
 
 const tradeData: Record<string, TradeDetail> = {
@@ -149,8 +202,16 @@ export default function Detail() {
   const latestTrade = [...data.timeline].filter(item => item.type === 'Trade').pop();
   const [timeline, setTimeline] = useState<TimelineItem[]>(data.timeline);
   const [editingTimelineItem, setEditingTimelineItem] = useState<TimelineItem | null>(null);
-  const [trackingVersion, setTrackingVersion] = useState(0);
   const [savedAssetTracking, setSavedAssetTracking] = useState<SavedAssetTracking | null>(null);
+  const [isGeneratingTracking, setIsGeneratingTracking] = useState(false);
+  const [trackingError, setTrackingError] = useState<string | null>(null);
+  const trackingRequestRef = useRef(0);
+
+  useEffect(() => {
+    trackingRequestRef.current += 1;
+    setIsGeneratingTracking(false);
+    setTrackingError(null);
+  }, [data.id]);
 
   useEffect(() => {
     const sync = () => {
@@ -188,6 +249,88 @@ export default function Detail() {
     saveLocalResult(`tradingnote:timeline:${data.id}`, updatedTimeline);
     setEditingTimelineItem(null);
   };
+
+  const generateTracking = async () => {
+    if (isGeneratingTracking) return;
+    const requestId = ++trackingRequestRef.current;
+    const tradeId = String(data.id);
+    setIsGeneratingTracking(true);
+    setTrackingError(null);
+
+    const plan = {
+      target: toPositiveNumber(data.plan?.target),
+      stopLoss: toPositiveNumber(data.plan?.stopLoss),
+      desc: optionalText(data.plan?.desc)
+    };
+    const code = String(data.code ?? '').trim();
+    const tradeContext = {
+      id: tradeId,
+      symbol: data.symbol,
+      code: /^\d{6}$/.test(code) ? code : undefined,
+      market: optionalText(data.market),
+      direction: data.direction,
+      status: optionalText(data.status),
+      time: optionalText(data.time),
+      shares: toPositiveNumber(data.shares),
+      buyPrice: toPositiveNumber(data.buyPrice),
+      currentPrice: toPositiveNumber(data.currentPrice),
+      plan: plan.target !== undefined || plan.stopLoss !== undefined || plan.desc ? plan : undefined,
+      timeline: toTrackingTimeline(timeline)
+    };
+
+    try {
+      let res: Response;
+      try {
+        res = await fetch(`${API_BASE_URL}/api/tracking/analyze`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ trade_context: tradeContext })
+        });
+      } catch {
+        throw new Error(`Can't reach the backend at ${API_BASE_URL}. Make sure it is running, then retry.`);
+      }
+
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        const detail = typeof body?.detail === 'string' ? body.detail : `HTTP ${res.status}`;
+        throw new Error(`AI Tracking failed: ${detail}`);
+      }
+      const analysis = body?.analysis;
+      if (!analysis || ANALYSIS_FIELDS.some(field => typeof analysis[field] !== 'string')) {
+        throw new Error('AI Tracking returned an unexpected response. Please retry.');
+      }
+      if (requestId !== trackingRequestRef.current) return;
+
+      const market = body.market_data ?? {};
+      const execution = analysis.execution.trim();
+      const record: SavedAssetTracking = {
+        asset: optionalText(body.tracking?.asset) || data.symbol,
+        overallSummary: analysis.comprehensive,
+        pnlResult: analysis.pnl,
+        processResult: `${execution}${/[.。!！?？]$/.test(execution) ? ' ' : '. '}${analysis.deviation}`,
+        lessonsLearned: analysis.suggestion,
+        savedAt: optionalText(body.tracking?.savedAt) || new Date().toISOString(),
+        generatedBy: 'ai-tracking',
+        marketData: {
+          available: market.available === true,
+          source: optionalText(market.source) ?? null,
+          as_of: optionalText(market.as_of) ?? null,
+          latest_close: typeof market.latest_close === 'number' ? market.latest_close : null,
+          is_realtime: market.is_realtime === true,
+          frequency: optionalText(market.frequency) ?? null
+        }
+      };
+      setSavedAssetTracking(record);
+      saveLocalResult(`tradingnote:asset-tracking:${tradeId}`, record);
+    } catch (err) {
+      if (requestId !== trackingRequestRef.current) return;
+      setTrackingError(err instanceof Error ? err.message : 'AI Tracking failed. Please retry.');
+    } finally {
+      if (requestId === trackingRequestRef.current) setIsGeneratingTracking(false);
+    }
+  };
+
+  const aiTracking = savedAssetTracking?.generatedBy === 'ai-tracking' ? savedAssetTracking : null;
 
   useEffect(() => {
     if (scrollTo) {
@@ -428,31 +571,59 @@ export default function Detail() {
             <Zap size={12} className="text-[#EE6C4D]" />
             AI Tracking
           </h2>
-          <button onClick={() => setTrackingVersion(version => version + 1)} className="bg-[#0B2545] text-white px-2.5 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 active:scale-95 transition-transform">
-            <Sparkles size={10} /> {trackingVersion > 0 ? 'Regenerate' : 'Generate'}
+          <button
+            onClick={() => void generateTracking()}
+            disabled={isGeneratingTracking}
+            aria-busy={isGeneratingTracking}
+            className="bg-[#0B2545] text-white px-2.5 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 active:scale-95 transition-transform disabled:opacity-60 disabled:active:scale-100"
+          >
+            {isGeneratingTracking
+              ? <><Loader2 size={10} className="animate-spin" /> Generating…</>
+              : <><Sparkles size={10} /> {aiTracking ? 'Regenerate' : 'Generate'}</>}
           </button>
         </div>
 
-        <div className="space-y-3">
+        {trackingError && (
+          <div role="alert" className="flex items-start gap-1.5 mb-3 px-2.5 py-2 bg-rose-50 border border-rose-200 rounded-lg text-[10px] font-medium text-rose-700 leading-snug">
+            <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+            <span className="flex-1">{trackingError}{savedAssetTracking ? ' Showing the last saved result.' : ''}</span>
+            <button onClick={() => void generateTracking()} disabled={isGeneratingTracking} className="shrink-0 font-bold underline disabled:opacity-60">Retry</button>
+          </div>
+        )}
+
+        <div className={cn("space-y-3 transition-opacity", isGeneratingTracking && "opacity-60")}>
           <div>
             <div className="text-[10px] font-bold uppercase tracking-wide text-[#EE6C4D] mb-1">Overall Summary</div>
-            <p className="text-[10px] text-slate-700 leading-relaxed">{savedAssetTracking?.overallSummary || (trackingVersion % 2 === 0 ? data.analysis.comprehensive : `${data.symbol} review: ${data.analysis.comprehensive}`)}</p>
+            <p className="text-[10px] text-slate-700 leading-relaxed">{savedAssetTracking?.overallSummary || data.analysis.comprehensive}</p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <div className="text-[10px] font-bold text-[#0B2545] mb-1">P&amp;L Result</div>
-              <p className="text-[10px] text-slate-700 leading-relaxed">{savedAssetTracking?.pnlResult || (trackingVersion % 2 === 0 ? data.analysis.pnl : `${data.analysis.pnl} Compare the realized return with the planned exit.`)}</p>
+              <p className="text-[10px] text-slate-700 leading-relaxed">{savedAssetTracking?.pnlResult || data.analysis.pnl}</p>
             </div>
             <div>
               <div className="text-[10px] font-bold text-[#0B2545] mb-1">Process Result</div>
-              <p className="text-[10px] text-slate-700 leading-relaxed">{savedAssetTracking?.processResult || (trackingVersion % 2 === 0 ? `${data.analysis.execution}. ${data.analysis.deviation}` : `${data.analysis.execution}. Check whether each decision followed the original risk rules. ${data.analysis.deviation}`)}</p>
+              <p className="text-[10px] text-slate-700 leading-relaxed">{savedAssetTracking?.processResult || `${data.analysis.execution}. ${data.analysis.deviation}`}</p>
             </div>
           </div>
           <div className="border-t border-slate-100 pt-2">
             <div className="text-[10px] font-bold text-[#0B2545] mb-1">Lessons Learned</div>
-            <p className="text-[10px] text-slate-700 leading-relaxed">{savedAssetTracking?.lessonsLearned || (trackingVersion % 2 === 0 ? data.analysis.suggestion : `${data.analysis.suggestion} Record this rule in the next trade plan.`)}</p>
+            <p className="text-[10px] text-slate-700 leading-relaxed">{savedAssetTracking?.lessonsLearned || data.analysis.suggestion}</p>
           </div>
-          {savedAssetTracking && <div className="text-right text-[8px] text-emerald-700 font-bold uppercase">Updated from M-Agent</div>}
+          {aiTracking?.marketData && (
+            <p className={cn("text-[9px] leading-relaxed", aiTracking.marketData.available ? "text-slate-500" : "text-amber-700")}>
+              {describeMarketData(aiTracking.marketData)}
+            </p>
+          )}
+          {aiTracking ? (
+            <div className="text-right text-[8px] text-emerald-700 font-bold uppercase">
+              Generated by AI Tracking · {new Date(aiTracking.savedAt).toLocaleString()}
+            </div>
+          ) : savedAssetTracking ? (
+            <div className="text-right text-[8px] text-emerald-700 font-bold uppercase">Updated from M-Agent</div>
+          ) : (
+            <div className="text-right text-[8px] text-slate-400 font-bold uppercase">Sample analysis · Tap Generate for AI Tracking</div>
+          )}
         </div>
       </div>
 

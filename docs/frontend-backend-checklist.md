@@ -22,6 +22,7 @@
 ### Tracking 分析与行情
 
 - `POST /api/tracking/analyze` 接收详情页的 `trade_context`，返回 `analysis.pnl`、`analysis.execution`、`analysis.deviation`、`analysis.comprehensive`、`analysis.suggestion`，并返回可直接存入最新前端模型的 `tracking` 字段。
+- Tracking 分析要求英文输出，并在后端按字段做硬字数上限；响应增加 `prompt_version` 和 `prompt_used.system_prompt/user_prompt`，可在 Swagger 的接口响应中查看本次实际发给模型的 prompt。`GET /api/tracking/prompt` 提供当前 prompt 模板和字数上限，便于迭代。
 - `GET /api/market/history/{code}` 按 `MARKET_DATA_PROVIDER_ORDER` 依次尝试 Wind Finmarket MCP、AkShare、BaoStock，响应中有 `source`、`providers_tried`、`frequency`、`adjustment`、`as_of`、`latest_close`、`is_realtime`、`bars`。
 - 当前只覆盖六位 A 股代码，返回未复权日线，不是实时行情。其他市场要先选择数据源。
 
