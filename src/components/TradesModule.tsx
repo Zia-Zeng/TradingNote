@@ -10,6 +10,7 @@ type SavedReview = { date: string; asset: string; summary: string };
 
 type TradeRecord = {
   id: string;
+  date?: string;
   time?: string;
   type: 'Buy' | 'Sell';
   symbol: string;
@@ -38,7 +39,17 @@ const formatAmount = (amount: number | string | undefined) => {
   return Number.isFinite(value) ? `¥ ${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '--';
 };
 
-export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
+const localDate = () => {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+};
+
+const localTime = () => {
+  const now = new Date();
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+};
+
+export default function TradesModule({ isCard = false, tradeDate }: { isCard?: boolean; tradeDate?: string }) {
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -124,7 +135,8 @@ export default function TradesModule({ isCard = false }: { isCard?: boolean }) {
     const amount = Number(data.price) * Number(data.qty);
     const payload: Omit<TradeRecord, 'id'> = {
       ...(editingTrade || {}),
-      time: editingTrade?.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      date: editingTrade ? editingTrade.date : tradeDate || localDate(),
+      time: editingTrade?.time || localTime(),
       type: data.direction,
       symbol: data.symbol,
       code: data.code || undefined,

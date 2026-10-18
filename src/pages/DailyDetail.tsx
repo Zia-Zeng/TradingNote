@@ -81,7 +81,7 @@ export default function DailyDetail() {
         </div>
 
         {/* Trades Module replaces old hardcoded timeline */}
-        <TradesModule isCard={false} />
+        <TradesModule isCard={false} tradeDate={date} />
 
         {/* My Notes Module */}
         <div className="bg-white px-4 py-5 shadow-sm border-t border-slate-100 mb-2 relative">

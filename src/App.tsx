@@ -19,8 +19,10 @@ export default function App() {
           <Route path="/" element={<Home />} />
           <Route path="/report" element={<Report />} />
           <Route path="/feed" element={<Feed />} />
+          <Route path="/feed/:articleIndex" element={<Feed />} />
           <Route path="/agent" element={<Agent />} />
           <Route path="/detail/:id" element={<Detail />} />
+          <Route path="/detail/:id/history" element={<Detail />} />
           <Route path="/daily/:date" element={<DailyDetail />} />
           <Route path="/notes" element={<Notes />} />
           <Route path="*" element={<Navigate to="/" replace />} />

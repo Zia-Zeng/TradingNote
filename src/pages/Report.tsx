@@ -109,7 +109,7 @@ export default function Report() {
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.98, y: -10 }}
               transition={{ type: "spring", stiffness: 300, damping: 30 }}
-              onClick={() => navigate(`/detail/${pos.id}`)}
+              onClick={() => navigate(`/detail/${encodeURIComponent(pos.code)}`)}
               className="bg-white/70 backdrop-blur-xl rounded-xl p-3 border border-white shadow-[0_4px_12px_rgba(11,37,69,0.04)] active:scale-[0.99] transition-transform relative z-10 cursor-pointer"
             >
               <div className="flex items-center justify-between mb-2">

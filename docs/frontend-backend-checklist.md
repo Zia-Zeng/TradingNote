@@ -21,9 +21,10 @@
 
 ### Tracking 分析与行情
 
-- `POST /api/tracking/analyze` 接收详情页的 `trade_context`，返回 `analysis.pnl`、`analysis.execution`、`analysis.deviation`、`analysis.comprehensive`、`analysis.suggestion`，并返回可直接存入最新前端模型的 `tracking` 字段。
-- Tracking 分析要求英文输出，并在后端按字段做硬字数上限；响应增加 `prompt_version` 和 `prompt_used.system_prompt/user_prompt`，可在 Swagger 的接口响应中查看本次实际发给模型的 prompt。`GET /api/tracking/prompt` 提供当前 prompt 模板和字数上限，便于迭代。
-- `GET /api/market/history/{code}` 按 `MARKET_DATA_PROVIDER_ORDER` 依次尝试 Wind Finmarket MCP、AkShare、BaoStock，响应中有 `source`、`providers_tried`、`frequency`、`adjustment`、`as_of`、`latest_close`、`is_realtime`、`bars`。
+- `POST /api/tracking/analyze` 接收详情页的 `trade_context`，返回 `analysis.overall_summary`、`analysis.pnl_analysis`、`analysis.process_evaluation`、`analysis.lessons_learned`，并将这四项映射到详情页的 Overall Summary、P&L Result、Process Result 和 Lessons Learned 卡片。
+- 单资产 Tracking 使用 `SINGLE_TRACKING_SYSTEM_PROMPT`（版本 `tracking-en-v6`），要求英文输出，并由后端按字段截断：50、30、40、40 词。响应带有 `prompt_version` 和 `prompt_used.system_prompt/user_prompt`，可在 Swagger 查看本次实际发给模型的 prompt。`GET /api/tracking/prompt` 提供当前 prompt 模板和字数上限，便于迭代。相关新闻由 Tavily 查询最近 30 天的数据。
+- Tracking 将交易事件日前后日 K 一并提供给模型，分析精度到交易日，不要求分钟级行情；若配置 Wind MCP 凭证且新闻工具可用，会同时提供相关市场新闻。
+- `GET /api/market/history/{code}` 按 `MARKET_DATA_PROVIDER_ORDER` 依次尝试 Wind Finmarket MCP、AkShare、BaoStock，响应含 `source`、`providers_tried` 和 `provider_failures` 诊断信息，以及 `frequency`、`adjustment`、`as_of`、`latest_close`、`is_realtime`、`bars`。
 - 当前只覆盖六位 A 股代码，返回未复权日线，不是实时行情。其他市场要先选择数据源。
 
 ### 交易记录
@@ -51,11 +52,10 @@
 6. **API 地址与跨域**：统一从 `VITE_API_BASE_URL` 读取后端地址；本机以 `http://127.0.0.1:8000` 为默认值。后端已允许本地 Vite 的 `517x` 端口；部署前端需在后端 `FRONTEND_ORIGINS` 中配置正式来源。手机访问时不能继续用访问者本机的 `127.0.0.1`。
 
 - 自定义 tag 已在 `zjj_version` 前端实现，后端接受 `motive.tags: string[]`，此项完成。
-- 可以交给 Qoder 的机械性工作：在曾确认不同时编辑 `Detail.tsx` 后，按现有请求/响应字段接入 Tracking API，并补齐加载、错误重试和行情来源提示。涉及字段语义或 UI 取舍的部分先由李、曾确认。
+- Tracking 页面只展示行情日期与收盘价，不向用户展示行情供应商、数据频率等技术元数据。
 
 - [ ] 在 `Detail.tsx` 调用 `POST /api/tracking/analyze`，把当前详情数据传入 `trade_context`；用返回的 `analysis` 替换页面硬编码的分析文字。
-- [ ] Tracking 区域增加加载中、请求失败后重试和行情缺失提示；有行情时展示 `market_data.source`、`market_data.as_of`，不要把日线显示成实时价。
-- [ ] Tracking 展示行情时说明数据来源，并使用 `is_realtime` 和 `frequency` 表达日线历史数据，避免让用户误认为实时行情。
+- [x] Tracking 区域已展示行情日期与收盘价；无行情时提示缺失，不展示供应商和数据频率。
 - [x] Agent 在交易卡片上下文可用后附带符合 Agent schema 的 `trade_context`；不要直接发送 Tracking 的详情 schema。
 - [x] 把 Agent 页 History 按钮接到 `GET /api/agent/conversations` 和 `GET /api/agent/conversations/{conversation_id}`，实现列表、选择和恢复对话。
 - [x] `RecordDrawer.tsx` 已支持自定义 tag 输入、创建、选择和移除；系统建议 tag 与自定义 tag 都保存在 `motive.tags: string[]`。

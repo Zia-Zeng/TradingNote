@@ -4,16 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import threading
+from copy import deepcopy
 from datetime import date
+from time import monotonic
 from typing import Any
 
 from starlette.concurrency import run_in_threadpool
 
 
 _BAOSTOCK_LOCK = threading.Lock()
+_HISTORY_CACHE: dict[tuple[str, str, str, str], tuple[float, dict[str, Any]]] = {}
+_HISTORY_LOCKS: dict[tuple[str, str, str, str], asyncio.Lock] = {}
+_HISTORY_CACHE_SECONDS = 600
+_HISTORY_FALLBACK_CACHE_SECONDS = 300
+logger = logging.getLogger(__name__)
 
 
 def _normalize_code(code: str) -> str:
@@ -52,7 +60,7 @@ def _bar(row: dict[str, Any]) -> dict[str, Any] | None:
         "open": ("open", "开盘", "开盘价", "s_dq_open"),
         "high": ("high", "最高", "最高价", "s_dq_high"),
         "low": ("low", "最低", "最低价", "s_dq_low"),
-        "close": ("close", "收盘", "收盘价", "s_dq_close"),
+        "close": ("close", "match", "收盘", "收盘价", "s_dq_close"),
         "volume": ("volume", "vol", "成交量", "s_dq_volume"),
         "amount": ("amount", "成交额", "turnover", "s_dq_amount"),
     }
@@ -85,6 +93,19 @@ def _rows_from_payload(payload: Any) -> list[dict[str, Any]]:
             return payload
         return []
     if isinstance(payload, dict):
+        columns = payload.get("columns")
+        row_values = payload.get("rows")
+        if isinstance(columns, list) and isinstance(row_values, list):
+            fields = [
+                column.get("name") if isinstance(column, dict) else column
+                for column in columns
+            ]
+            if all(isinstance(field, str) for field in fields):
+                return [
+                    dict(zip(fields, row))
+                    for row in row_values
+                    if isinstance(row, (list, tuple))
+                ]
         for key in ("bars", "data", "rows", "items", "result", "records", "history"):
             if key in payload:
                 rows = _rows_from_payload(payload[key])
@@ -105,11 +126,18 @@ def _normalize_rows(rows: list[dict[str, Any]], start_date: str, end_date: str) 
     )
 
 
-def _response(code: str, bars: list[dict[str, Any]], source: str, tried: list[str]) -> dict[str, Any]:
+def _response(
+    code: str,
+    bars: list[dict[str, Any]],
+    source: str,
+    tried: list[str],
+    failures: list[dict[str, str]],
+) -> dict[str, Any]:
     return {
         "code": code,
         "source": source,
         "providers_tried": tried,
+        "provider_failures": failures,
         "as_of": bars[-1]["date"] if bars else None,
         "latest_close": bars[-1]["close"] if bars else None,
         "is_realtime": False,
@@ -214,6 +242,84 @@ def _wind_payload(result: Any) -> Any:
     raise RuntimeError("Wind returned no structured market data.")
 
 
+def _wind_tool_rows(payload: Any) -> list[dict[str, Any]]:
+    """Normalize the rows returned by Wind's generic tool-discovery endpoint."""
+    if isinstance(payload, dict):
+        rows = payload.get("rows")
+        columns = payload.get("columnNames") or payload.get("columns")
+        if isinstance(rows, list) and isinstance(columns, list):
+            return [dict(zip(columns, row)) for row in rows if isinstance(row, (list, tuple))]
+        if isinstance(rows, list) and rows and all(isinstance(row, dict) for row in rows):
+            return rows
+        for key in ("data", "result", "content"):
+            if key in payload:
+                found = _wind_tool_rows(payload[key])
+                if found:
+                    return found
+    return []
+
+
+async def _wind_resolve_tool(
+    session: Any,
+    tools: list[Any],
+    target_name: str,
+    question: str,
+) -> tuple[str, dict[str, Any], bool]:
+    """Resolve a direct Wind tool or discover it through the generic MCP router."""
+    direct = next((tool for tool in tools if target_name in tool.name.lower()), None)
+    if direct:
+        return direct.name, direct.inputSchema, False
+
+    search_tool = next((tool for tool in tools if tool.name == "market_search_tools"), None)
+    if search_tool is None:
+        raise RuntimeError(f"Wind MCP does not expose {target_name} or market_search_tools.")
+
+    search_properties = (search_tool.inputSchema or {}).get("properties", {})
+    search_args: dict[str, Any] = {}
+    if "question" in search_properties:
+        search_args["question"] = question
+    if "topK" in search_properties:
+        search_args["topK"] = 5
+    elif "top_k" in search_properties:
+        search_args["top_k"] = 5
+    search_result = await session.call_tool(search_tool.name, search_args)
+    if getattr(search_result, "isError", False):
+        raise RuntimeError("Wind tool discovery failed.")
+
+    rows = _wind_tool_rows(_wind_payload(search_result))
+    match = next(
+        (row for row in rows if str(row.get("toolName", row.get("tool_name", ""))).lower() == target_name),
+        None,
+    )
+    if match is None:
+        raise RuntimeError(f"Wind MCP did not discover {target_name}.")
+    schema = match.get("params") or match.get("inputSchema") or match.get("input_schema")
+    if isinstance(schema, str):
+        schema = json.loads(schema)
+    if not isinstance(schema, dict):
+        raise RuntimeError(f"Wind discovery returned no schema for {target_name}.")
+    return str(match.get("toolName", match.get("tool_name"))), schema, True
+
+
+async def _wind_call_tool(
+    session: Any,
+    tools: list[Any],
+    tool_name: str,
+    args: dict[str, Any],
+    use_router: bool,
+) -> Any:
+    if not use_router:
+        return await session.call_tool(tool_name, args)
+
+    call_tool = next((tool for tool in tools if tool.name == "market_call_tool"), None)
+    if call_tool is None:
+        raise RuntimeError("Wind MCP does not expose market_call_tool.")
+    return await session.call_tool(call_tool.name, {
+        "toolName": tool_name,
+        "arguments": json.dumps(args, ensure_ascii=False),
+    })
+
+
 async def _wind_history(code: str, start: str, end: str) -> list[dict[str, Any]]:
     endpoint = os.getenv("WIND_MCP_URL", "https://mcp.wind.com.cn/vserver_wind_tools/mcp/").strip()
     token = os.getenv("WIND_MCP_BEARER_TOKEN", "").strip()
@@ -230,13 +336,14 @@ async def _wind_history(code: str, start: str, end: str) -> list[dict[str, Any]]
     async with streamablehttp_client(endpoint, headers=headers) as (read_stream, write_stream, _):
         async with ClientSession(read_stream, write_stream) as session:
             await session.initialize()
-            tools = await session.list_tools()
-            candidates = [tool for tool in tools.tools if "get_stock_kline" in tool.name.lower()]
-            if not candidates:
-                raise RuntimeError("Wind MCP does not expose a stock kline tool.")
-            tool = candidates[0]
-            args = _wind_tool_args(tool.inputSchema, code, start, end)
-            result = await session.call_tool(tool.name, args)
+            tools = (await session.list_tools()).tools
+            wind_code = _wind_code(code)
+            question = f"Query daily K-line history for {wind_code} from {start} through {end}."
+            tool_name, schema, use_router = await _wind_resolve_tool(
+                session, tools, "get_stock_kline", question
+            )
+            args = _wind_tool_args(schema, code, start, end)
+            result = await _wind_call_tool(session, tools, tool_name, args, use_router)
             if getattr(result, "isError", False):
                 raise RuntimeError("Wind kline request failed.")
             rows = _rows_from_payload(_wind_payload(result))
@@ -247,12 +354,34 @@ async def _wind_history(code: str, start: str, end: str) -> list[dict[str, Any]]
 
 
 async def fetch_a_share_history(code: str, start_date: date | str, end_date: date | str) -> dict[str, Any]:
-    """Fetch unadjusted A-share daily bars, falling back in configured order."""
+    """Reuse recent daily history while keeping provider fallback for cache misses."""
     normalized_code = _normalize_code(code)
     start = _date_text(start_date)
     end = _date_text(end_date)
     if start > end:
         raise ValueError("start_date must be earlier than or equal to end_date.")
+
+    provider_order = os.getenv("MARKET_DATA_PROVIDER_ORDER", "wind,akshare,baostock")
+    key = (normalized_code, start, end, provider_order)
+    cached = _HISTORY_CACHE.get(key)
+    if cached and cached[0] > monotonic():
+        return deepcopy(cached[1])
+
+    async with _HISTORY_LOCKS.setdefault(key, asyncio.Lock()):
+        cached = _HISTORY_CACHE.get(key)
+        if cached and cached[0] > monotonic():
+            return deepcopy(cached[1])
+        result = await _fetch_a_share_history_uncached(normalized_code, start, end)
+        ttl = _HISTORY_CACHE_SECONDS if result["source"] == "Wind Finmarket" else _HISTORY_FALLBACK_CACHE_SECONDS
+        _HISTORY_CACHE[key] = (monotonic() + ttl, result)
+        if len(_HISTORY_CACHE) > 64:
+            oldest = min(_HISTORY_CACHE, key=lambda item: _HISTORY_CACHE[item][0])
+            _HISTORY_CACHE.pop(oldest, None)
+        return deepcopy(result)
+
+
+async def _fetch_a_share_history_uncached(normalized_code: str, start: str, end: str) -> dict[str, Any]:
+    """Fetch unadjusted A-share daily bars, falling back in configured order."""
 
     configured = os.getenv("MARKET_DATA_PROVIDER_ORDER", "wind,akshare,baostock")
     provider_order = [name.strip().lower() for name in configured.split(",") if name.strip()]
@@ -262,7 +391,7 @@ async def fetch_a_share_history(code: str, start_date: date | str, end_date: dat
         raise ValueError(f"Unknown market data provider(s): {', '.join(unknown)}.")
 
     tried: list[str] = []
-    failures: list[str] = []
+    failures: list[dict[str, str]] = []
     for provider in provider_order:
         tried.append(providers[provider])
         try:
@@ -273,10 +402,20 @@ async def fetch_a_share_history(code: str, start_date: date | str, end_date: dat
             else:
                 bars = await run_in_threadpool(_baostock_history, normalized_code, start, end)
             if bars:
-                return _response(normalized_code, bars, providers[provider], tried)
-            failures.append(f"{provider}: empty response")
+                return _response(normalized_code, bars, providers[provider], tried, failures)
+            failure = {"provider": providers[provider], "reason": "empty response"}
+            failures.append(failure)
+            logger.warning("A-share market data provider failed: %s (%s)", failure["provider"], failure["reason"])
         except Exception as exc:
-            # Keep details out of API responses/logs because MCP errors can contain request metadata.
-            failures.append(f"{provider}: {type(exc).__name__}")
+            # Keep provider failures useful while preventing credentials or URLs from leaking.
+            detail = str(exc).splitlines()[0][:240]
+            detail = re.sub(r"(?i)with url: .*", "with url: <redacted>", detail)
+            detail = re.sub(r"https?://\S+", "<url>", detail)
+            detail = re.sub(r"(?i)(authorization|bearer|token|api[_-]?key)([=: ]+)\S+", r"\1\2<redacted>", detail)
+            failure = {"provider": providers[provider], "reason": type(exc).__name__, "detail": detail}
+            failures.append(failure)
+            logger.warning("A-share market data provider failed: %s (%s): %s", failure["provider"], failure["reason"], detail)
 
-    raise RuntimeError("All configured A-share history providers failed (" + "; ".join(failures) + ").")
+    raise RuntimeError("All configured A-share history providers failed (" + "; ".join(
+        f"{item['provider']}: {item['reason']}" for item in failures
+    ) + ").")

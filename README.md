@@ -23,6 +23,14 @@ The repository deploys the current `main` branch through GitHub Actions. Each pu
 
 The site is a static prototype and does not connect to a brokerage or trading API.
 
+### Daily Feed
+
+The Feed page requests `GET /api/feed`. The API finds a recent financial-market headline with Tavily, generates five English essays through DeepSeek using five distinct books from the configured reading list, and caches the edition in SQLite. Each article includes a title, up to 3 tags, a 20–30-word summary, and an approximately 300-word essay. A background task prepares the next edition at midnight Asia/Shanghai; opening Feed also creates that day's edition if the scheduled run was missed. Each essay discusses the shared headline and closes with cautious, evidence-based trading guidance.
+
+The current system prompt is available in Swagger at `GET /api/feed/prompt` and in `backend/app/prompts/feed_system.txt`. The API reads the file for each generation, so prompt edits take effect without restarting the backend.
+
+The scheduler runs inside the Agent API process. Keep that backend running for the midnight job, and configure both `TAVILY_API_KEY` and `DEEPSEEK_API_KEY` in `backend/.env`. GitHub Pages only hosts the static frontend, so a deployed Feed also needs a continuously running backend: set `VITE_API_BASE_URL` to its HTTPS API URL when building the frontend, and add the frontend origin to `FRONTEND_ORIGINS` on the backend. Without a reachable backend and those keys, Feed shows a setup message instead of generated articles.
+
 ## Run the local Agent API
 
 The backend provides Agent chat, locally persisted conversation history, historical A-share daily bars, and AI Tracking analysis. API keys stay in a local environment file and must not be committed.
@@ -34,7 +42,7 @@ cd backend
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 Copy-Item .env.example .env
-# Edit backend/.env and set DEEPSEEK_API_KEY. Add a rotated Wind token to WIND_MCP_BEARER_TOKEN if your account can use the Wind MCP service.
+# Edit backend/.env and set DEEPSEEK_API_KEY and TAVILY_API_KEY. Set WIND_MCP_BEARER_TOKEN if your account can use Wind daily market history.
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -42,7 +50,7 @@ Open `http://127.0.0.1:8000/docs` to inspect and try the API. The chat endpoint 
 
 Chat history is stored locally in `backend/data/tradingnote.sqlite3`, which is created automatically when the backend starts and is ignored by Git. The backend exposes `GET /api/agent/conversations` to list recent conversations and `GET /api/agent/conversations/{conversation_id}` to load one conversation. The model receives up to the latest 12 messages as context.
 
-Trade records can be persisted through `GET /api/trades`, `POST /api/trades`, `GET /api/trades/{trade_id}`, `PUT /api/trades/{trade_id}`, and `DELETE /api/trades/{trade_id}`. These endpoints keep the trade card field names used by `TradesModule`, including `type` (`Buy` or `Sell`), `price`, `qty`, `motive.tags`, and `plan.tp/sl/desc`. New records may omit `id`; the backend returns a generated ID.
+Trade records can be persisted through `GET /api/trades`, `POST /api/trades`, `GET /api/trades/{trade_id}`, `PUT /api/trades/{trade_id}`, and `DELETE /api/trades/{trade_id}`. These endpoints keep the trade card field names used by `TradesModule`, including `type` (`Buy` or `Sell`), `price`, `qty`, `motive.tags`, and `plan.tp/sl/desc`. New records may omit `id`; the backend returns a generated ID. The optional `date` field uses `YYYY-MM-DD`; Today writes the selected journal date so Tracking can align trades with daily bars. Existing records without a date remain readable, but their chart markers cannot be positioned on a specific day.
 
 The endpoint accepts an optional `trade_context` object so the Agent can review a specific record:
 
@@ -78,9 +86,9 @@ The trade object keeps the frontend's existing field names: `type`, `motive.tags
 
 ### Market history and AI Tracking
 
-`GET /api/market/history/{code}?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` returns historical daily bars for six-digit mainland China A-share codes. Providers are tried in the order in `MARKET_DATA_PROVIDER_ORDER`, which defaults to Wind Finmarket MCP, AkShare, then BaoStock. Wind requires `WIND_MCP_BEARER_TOKEN`; when it is absent or a provider request fails, the next source is tried. Responses include `source`, `providers_tried`, `frequency`, `adjustment`, `as_of`, `latest_close`, `is_realtime`, and `bars`. All three integrations currently request unadjusted daily history; none is treated as a real-time quote feed. AkShare aggregates data from upstream public services, so availability and upstream data terms can vary. Other markets (bonds, Hong Kong, US assets, and crypto shown in the demo) need separate providers; until then, Tracking analysis can proceed with values already present in the detail page and must disclose missing market data.
+`GET /api/market/history/{code}?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` returns historical daily bars for six-digit mainland China A-share codes. Providers are tried in the order in `MARKET_DATA_PROVIDER_ORDER`, which defaults to Wind Finmarket MCP, AkShare, then BaoStock. Wind requires `WIND_MCP_BEARER_TOKEN`; when it is absent or a provider request fails, the next source is tried. Successful responses include `source`, `providers_tried`, `provider_failures`, `frequency`, `adjustment`, `as_of`, `latest_close`, `is_realtime`, and `bars`. All three integrations currently request unadjusted daily history; none is treated as a real-time quote feed. AkShare aggregates data from upstream public services, so availability and upstream data terms can vary.
 
-`POST /api/tracking/analyze` accepts the current Detail page field names and returns an `analysis` object matching the existing UI (`pnl`, `execution`, `deviation`, `comprehensive`, `suggestion`). It uses the transaction timeline for entry/exit facts, attempts the configured A-share providers from the trade date through today, then asks DeepSeek to produce the five analysis strings as JSON. If all providers are unavailable, the endpoint still analyzes the provided trade fields and identifies the missing market context.
+`POST /api/tracking/analyze` accepts the current Detail page field names and returns the four-field `analysis` object consumed by the UI. It uses the transaction timeline and available daily bars around entry/exit dates, retrieves dated asset and market news snippets through Tavily Search when `TAVILY_API_KEY` is configured, then asks DeepSeek to produce the four analysis strings as JSON. News retrieval uses the `news` topic, searches the last 30 days independently of the last trade date, and discards results without an asset match. If relevant market news is unavailable, the prompt tells the model to disclose that limitation without inventing news or macro factors. Wind remains the first configured source for A-share daily bars; it is no longer used for Tracking news.
 
 Example request:
 
