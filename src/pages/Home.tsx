@@ -407,6 +407,15 @@ export default function Home() {
                           <span className="font-bold text-slate-500">Market</span>
                           {benchmarks.map((item) => <span key={item.market}>{item.name} {item.change_pct == null ? 'unavailable' : `${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`}</span>)}
                         </div>}
+                        {(facts.market_news?.length ?? 0) > 0 && <div className="space-y-1 border-t border-[#0B2545]/10 pt-1.5">
+                          <span className="font-bold text-slate-500">External context · Tavily</span>
+                          {facts.market_news?.slice(0, 3).map((item) => <div key={item.url} className="text-[9px] leading-relaxed text-slate-600">
+                            <a href={item.url} target="_blank" rel="noreferrer" className="font-semibold text-[#134074] underline decoration-slate-300 underline-offset-2">{item.title}</a>
+                            <span className="ml-1 text-slate-400">{item.source}{item.published_date ? ` · ${item.published_date}` : ''}</span>
+                            <p className="line-clamp-2 text-slate-500">{item.snippet}</p>
+                          </div>)}
+                        </div>}
+                        {!facts.market_news?.length && facts.market_news_warning && <p className="text-[9px] text-amber-700">External news context unavailable: {facts.market_news_warning}</p>}
                         {facts.portfolio_warnings?.[0] && <p className="text-[9px] text-amber-700">{facts.portfolio_warnings[0]}</p>}
                       </div>
                     );
@@ -513,6 +522,21 @@ export default function Home() {
                   <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Execution conclusion</div>
                   <p className="text-[11px] font-medium leading-relaxed text-[#134074]">{dailyReview.trade_review_overview}</p>
                 </div>
+              )}
+              {(dailyReview.trade_review_market_news?.length ?? 0) > 0 && (
+                <div className="mb-2.5 rounded-lg border border-sky-100 bg-sky-50/60 p-2.5">
+                  <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-sky-800">External market context · Tavily</div>
+                  <div className="space-y-1.5">
+                    {dailyReview.trade_review_market_news?.slice(0, 3).map((item) => <div key={item.url} className="text-[9px] leading-relaxed text-slate-600">
+                      <a href={item.url} target="_blank" rel="noreferrer" className="font-semibold text-[#134074] underline decoration-slate-300 underline-offset-2">{item.title}</a>
+                      <span className="ml-1 text-slate-400">{item.source}{item.published_date ? ` · ${item.published_date}` : ''}</span>
+                      <p className="line-clamp-2 text-slate-500">{item.snippet}</p>
+                    </div>)}
+                  </div>
+                </div>
+              )}
+              {!dailyReview.trade_review_market_news?.length && dailyReview.trade_review_market_news_warning && (
+                <p className="mb-2.5 text-[9px] text-amber-700">External news context unavailable: {dailyReview.trade_review_market_news_warning}</p>
               )}
               {dailyReview.trade_reviews?.length ? <div className="space-y-2">
                 {dailyReview.trade_reviews.map(item => (

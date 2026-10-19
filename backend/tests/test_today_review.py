@@ -270,6 +270,7 @@ class SeparateDailyGenerationTests(unittest.IsolatedAsyncioTestCase):
             }],
         })
         with patch("app.today._trade_review_context", return_value=context), \
+                patch("app.today._market_news_context", new=AsyncMock(return_value={"results": [], "warning": None})), \
                 patch("app.today._deepseek_json", new=AsyncMock(return_value=model_json)), \
                 patch("app.today._save_daily_review_part") as save:
             result = await today.generate_trade_reviews("2026-10-18")
@@ -277,6 +278,7 @@ class SeparateDailyGenerationTests(unittest.IsolatedAsyncioTestCase):
         save.assert_called_once()
         self.assertEqual(save.call_args.args[1], "trades")
         self.assertEqual(result["trade_reviews"][0]["evidence_refs"], ["trade:today-1"])
+        self.assertEqual(result["trade_review_market_news"], [])
 
     async def test_summary_saves_only_summary_part(self):
         context = {"trade_date": "2026-10-18", "portfolio_result": {"pnl_by_currency": {"CNY": 12}}, "today_trades": [], "today_notes": []}

@@ -42,6 +42,17 @@ export type DailySummaryFacts = {
     date: string;
     change_pct: number | null;
   }>;
+  market_news?: DailyMarketNews[];
+  market_news_warning?: string | null;
+};
+
+export type DailyMarketNews = {
+  title: string;
+  url: string;
+  published_date: string | null;
+  source: string;
+  score?: number | null;
+  snippet: string;
 };
 
 export type DailyReview = {
@@ -55,6 +66,8 @@ export type DailyReview = {
   trade_review_focus: string[];
   trade_review_stats: DailyTradeReviewStats | null;
   trade_review_evidence: DailyTradeReviewEvidence[];
+  trade_review_market_news?: DailyMarketNews[];
+  trade_review_market_news_warning?: string | null;
   trade_reviews_generated_at: string | null;
 };
 
