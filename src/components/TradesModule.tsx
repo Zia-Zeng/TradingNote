@@ -25,6 +25,7 @@ type TradeRecord = {
   price: number | string;
   qty: number | string;
   amount?: number | string;
+  fee?: number | string;
   closeVsFill?: string;
   closeVsFillColor?: string;
   motive?: { posTag?: string; tags?: string[]; desc?: string };
@@ -59,6 +60,7 @@ export default function TradesModule({ isCard = false, tradeDate, view = 'day' }
   const [tradeToDelete, setTradeToDelete] = useState<TradeRecord | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [recordSavedNotice, setRecordSavedNotice] = useState(false);
   const sortedTrades = sortTrades(trades);
   const historyFrom = searchParams.get('from') || '';
   const historyTo = searchParams.get('to') || '';
@@ -84,6 +86,12 @@ export default function TradesModule({ isCard = false, tradeDate, view = 'day' }
   };
 
   useEffect(() => { void loadTrades(); }, []);
+
+  useEffect(() => {
+    if (!recordSavedNotice) return;
+    const timer = window.setTimeout(() => setRecordSavedNotice(false), 6000);
+    return () => window.clearTimeout(timer);
+  }, [recordSavedNotice]);
 
   useEffect(() => {
     const sync = () => setSavedReviews({
@@ -199,6 +207,7 @@ export default function TradesModule({ isCard = false, tradeDate, view = 'day' }
         : await apiRequest<TradeRecord>('/api/trades', { method: 'POST', body: JSON.stringify(payload) });
       const normalized = normalizeTrade(saved);
       lastSavedTrade.current = normalized;
+      if (!editingTrade) setRecordSavedNotice(true);
       setTrades(current => editingTrade
         ? current.map(trade => trade.id === editingTrade.id ? normalized : trade)
         : [normalized, ...current]);
@@ -400,11 +409,16 @@ export default function TradesModule({ isCard = false, tradeDate, view = 'day' }
         ))}
       </div>}
 
-      {view === 'recent' && trades.length > 3 && (
-        <button onClick={() => navigate('/trades')} className="mt-4 flex w-full items-center justify-center gap-1 border-t border-slate-100 pt-3 text-[11px] font-bold text-[#EE6C4D]">
-          View All Trades <ChevronRight size={13} />
+      {(view === 'day' || (view === 'recent' && trades.length > 3)) && (
+        <button onClick={() => navigate('/trades')} className="mt-3 flex w-full items-center justify-center gap-1 border-t border-slate-100 pt-3 text-[11px] font-bold text-[#EE6C4D]">
+          View All History Trades <ChevronRight size={13} />
         </button>
       )}
+
+      {recordSavedNotice && view === 'day' && <div role="status" className="fixed bottom-[88px] left-1/2 z-[115] flex w-[min(92vw,380px)] -translate-x-1/2 items-center justify-between gap-3 rounded-xl bg-[#0B2545] px-3 py-2.5 text-[10px] text-white shadow-xl">
+        <span className="min-w-0 leading-relaxed">Trade synced to your ledger. You can find it in View All History Trades.</span>
+        <button onClick={() => navigate('/trades')} className="shrink-0 font-bold text-[#FFB199]">View history</button>
+      </div>}
 
       <RecordDrawer 
         isOpen={drawerOpen} 

@@ -30,7 +30,8 @@ def roll_portfolio(
 
     Uses moving weighted-average cost. Daily P&L is the change in portfolio
     unrealized P&L plus realized P&L booked by that day's sells. A buy/sell
-    cash flow is not itself P&L. Fees, tax and corporate actions are excluded.
+    cash flow is not itself P&L. Explicit trade fees are included in cost basis
+    and realized P&L; absent fees are treated as zero.
     """
     baseline_date = str(baseline["as_of"])
     start = date.fromisoformat(baseline_date)
@@ -98,22 +99,24 @@ def roll_portfolio(
             position = positions.setdefault(key, {"symbol": trade.get("symbol") or key[2], "code": trade.get("code") or key[2], "market": key[0], "currency": key[1], "quantity": 0.0, "average_cost": 0.0, "last_close": None})
             ccy = key[1]
             qty, price = float(trade.get("qty") or 0), float(trade.get("price") or 0)
-            amount = float(trade.get("amount") if trade.get("amount") is not None else qty * price)
+            fee = float(trade.get("fee") or 0)
+            gross_amount = qty * price
             if str(trade.get("type") or "").lower() == "buy":
                 old_qty = float(position["quantity"])
                 new_qty = old_qty + qty
-                position["average_cost"] = ((old_qty * float(position["average_cost"])) + qty * price) / new_qty if new_qty else 0.0
+                position["average_cost"] = ((old_qty * float(position["average_cost"])) + gross_amount + fee) / new_qty if new_qty else 0.0
                 position["quantity"] = new_qty
-                cash[ccy] = cash.get(ccy, 0.0) - amount
+                cash[ccy] = cash.get(ccy, 0.0) - gross_amount - fee
             else:
                 old_qty = float(position["quantity"])
                 sold = min(qty, old_qty)
-                realized[ccy] = realized.get(ccy, 0.0) + sold * (price - float(position["average_cost"]))
+                allocated_fee = fee * sold / qty if qty else 0.0
+                realized[ccy] = realized.get(ccy, 0.0) + sold * (price - float(position["average_cost"])) - allocated_fee
                 position["quantity"] = old_qty - sold
                 if position["quantity"] <= 1e-10:
                     position["quantity"] = 0.0
                     position["average_cost"] = 0.0
-                cash[ccy] = cash.get(ccy, 0.0) + amount
+                cash[ccy] = cash.get(ccy, 0.0) + gross_amount - fee
 
         day_unrealized: dict[str, float] = {}
         held_value: dict[str, float] = {}
@@ -148,4 +151,4 @@ def roll_portfolio(
         days.append({**state, "pnl_by_currency": {k: round(v, 4) for k, v in sorted(pnl.items())}, "daily_state": state})
         last_daily_unrealized = day_unrealized
 
-    return {"baseline_date": baseline_date, "days": days, "incomplete_dates": missing_dates, "warnings": ["Daily P&L includes realized P&L on sells and the daily change in unrealized P&L. Moving weighted-average cost is used. Fees, taxes and corporate actions are excluded."]}
+    return {"baseline_date": baseline_date, "days": days, "incomplete_dates": missing_dates, "warnings": ["Daily P&L includes realized P&L on sells and the daily change in unrealized P&L. Moving weighted-average cost includes explicitly recorded trade fees; absent fees are treated as zero. Taxes and corporate actions are excluded."]}

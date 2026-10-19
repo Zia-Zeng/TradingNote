@@ -12,6 +12,7 @@ export type ImportedTradeDraft = {
   price: number;
   qty: number;
   amount?: number;
+  fee?: number;
   motive?: { posTag?: string; tags?: string[]; desc?: string };
   plan?: { tp?: string | number; sl?: string | number; desc?: string };
 };
@@ -32,6 +33,7 @@ const HEADER_ALIASES: Record<keyof Omit<ImportedTradeDraft, 'motive' | 'plan'>, 
   price: ['price', 'fill price', '成交价格', '成交均价', '价格', '均价'],
   qty: ['qty', 'quantity', 'shares', 'volume', '成交数量', '数量', '股数'],
   amount: ['amount', 'turnover', '成交金额', '金额'],
+  fee: ['fee', 'fees', 'commission', 'transaction fee', '费用', '手续费', '交易税费'],
 };
 
 const normalizeHeader = (value: unknown) => String(value ?? '').trim().toLowerCase().replace(/[\s_\-()（）]/g, '');
@@ -119,6 +121,7 @@ function rowToTrade(row: Record<string, unknown>, rowNumber: number): { trade?: 
       price: price!,
       qty: qty!,
       amount: numberValue(lookup(row, 'amount')),
+      fee: numberValue(lookup(row, 'fee')),
     },
   };
 }

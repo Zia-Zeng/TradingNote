@@ -500,7 +500,9 @@ async def fetch_daily_history(code: str, market: str, start_date: date | str, en
     if normalized_market == "CN" and re.fullmatch(r"\d{6}(?:\.(?:SH|SZ|BJ|SS))?", normalized_code, re.IGNORECASE):
         result = await fetch_a_share_history(normalized_code[:6], start, end)
     else:
-        yahoo_code = f"{normalized_code}.HK" if normalized_market == "HK" and re.fullmatch(r"\d{1,5}", normalized_code) else normalized_code
+        # Broker ledgers commonly use a five-digit Hong Kong code (02259),
+        # while Yahoo charts use the unpadded ticker (2259.HK).
+        yahoo_code = f"{normalized_code.lstrip('0') or '0'}.HK" if normalized_market == "HK" and re.fullmatch(r"\d{1,5}", normalized_code) else normalized_code
         result = await asyncio.wait_for(run_in_threadpool(_yahoo_history, yahoo_code, start, end), timeout=14)
     with _HISTORY_CACHE_LOCK:
         _HISTORY_CACHE[cache_key] = (monotonic() + 300, result)

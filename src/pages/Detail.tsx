@@ -65,6 +65,7 @@ type TradeRecord = {
   price: number | string;
   qty: number | string;
   amount?: number | string;
+  fee?: number | string;
   closeVsFill?: string;
   closeVsFillColor?: string;
   motive?: { posTag?: string; tags?: string[]; desc?: string };
@@ -259,8 +260,8 @@ export default function Detail() {
     const buyQuantity = buyTrades.reduce((sum, trade) => sum + Number(trade.qty || 0), 0);
     const soldQuantity = sellTrades.reduce((sum, trade) => sum + Number(trade.qty || 0), 0);
     const netQuantity = buyQuantity - soldQuantity;
-    const buyAmount = buyTrades.reduce((sum, trade) => sum + Number(trade.price || 0) * Number(trade.qty || 0), 0);
-    const sellAmount = sellTrades.reduce((sum, trade) => sum + Number(trade.price || 0) * Number(trade.qty || 0), 0);
+    const buyAmount = buyTrades.reduce((sum, trade) => sum + Number(trade.price || 0) * Number(trade.qty || 0) + Number(trade.fee || 0), 0);
+    const sellAmount = sellTrades.reduce((sum, trade) => sum + Number(trade.price || 0) * Number(trade.qty || 0) - Number(trade.fee || 0), 0);
     const close = marketData?.latest_close ?? (marketData && marketData.bars.length
       ? marketData.bars[marketData.bars.length - 1].close
       : null);
@@ -646,7 +647,7 @@ export default function Detail() {
               {data.profitPct}
             </div>
             <div className="text-[9px] text-slate-500 font-medium">
-              PnL before fees <span className="font-bold text-[#134074] ml-1 font-mono">{data.profitVal}</span>
+              PnL (including recorded fees) <span className="font-bold text-[#134074] ml-1 font-mono">{data.profitVal}</span>
             </div>
           </div>
         </div>

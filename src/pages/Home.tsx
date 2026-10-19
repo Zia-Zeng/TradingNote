@@ -31,6 +31,8 @@ export default function Home() {
   const dateParam = searchParams.get('date');
   const parsedDateParam = dateParam ? new Date(`${dateParam}T00:00:00`) : null;
   const selectedDate = parsedDateParam && localDate(parsedDateParam) === dateParam ? dateParam! : localDate();
+  const todayDate = localDate();
+  const todayMonthKey = todayDate.slice(0, 7);
 
   const [onboardingStep, setOnboardingStep] = useState(0);
   const [calendarMonth, setCalendarMonth] = useState(() => new Date(`${selectedDate.slice(0, 7)}-01T00:00:00`));
@@ -45,6 +47,10 @@ export default function Home() {
   const [portfolioPnl, setPortfolioPnl] = useState<DailyPnlResult | null>(null);
   const [portfolioPnlLoading, setPortfolioPnlLoading] = useState(true);
   const [portfolioPnlError, setPortfolioPnlError] = useState('');
+  const [overviewPnl, setOverviewPnl] = useState<DailyPnlResult | null>(null);
+  const [overviewPnlLoading, setOverviewPnlLoading] = useState(true);
+  const [overviewPnlError, setOverviewPnlError] = useState('');
+  const [tradeReviewError, setTradeReviewError] = useState('');
   const pnlRequestRef = useRef(0);
 
   const { notes: attentionNotes, error: notesError, add: addNote, remove: removeNote } = useDailyNotes(selectedDate);
@@ -90,6 +96,7 @@ export default function Home() {
     setDailyReview(null);
     setSummaryStale(false);
     setTradeReviewsStale(false);
+    setTradeReviewError('');
     setReviewError('');
     getDailyReview(selectedDate)
       .then(result => { if (active) setDailyReview(result); })
@@ -125,12 +132,12 @@ export default function Home() {
 
   const handleGenerateTradeReviews = async () => {
     setTradeReviewsGenerating(true);
-    setReviewError('');
+    setTradeReviewError('');
     try {
       setDailyReview(await generateTradeReviews(selectedDate));
       setTradeReviewsStale(false);
     } catch (error) {
-      setReviewError(error instanceof Error ? error.message : 'Trade review generation failed. Please retry.');
+      setTradeReviewError(error instanceof Error ? error.message : 'Trade review generation failed. Please retry.');
     } finally {
       setTradeReviewsGenerating(false);
     }
@@ -177,16 +184,43 @@ export default function Home() {
 
   useEffect(() => {
     let active = true;
+    let pnlReloadTimer: number | undefined;
+    const today = localDate();
+    const currentMonth = today.slice(0, 7);
+    const loadOverviewPnl = (requestId: number) => {
+      setOverviewPnlLoading(true);
+      setOverviewPnlError('');
+      void getDailyPnl(`${currentMonth}-01`, today)
+        .then(result => { if (active && requestId === pnlRequestRef.current) setOverviewPnl(result); })
+        .catch(error => { if (active && requestId === pnlRequestRef.current) setOverviewPnlError(error instanceof Error ? error.message : 'Unable to calculate portfolio P&L.'); })
+        .finally(() => { if (active && requestId === pnlRequestRef.current) setOverviewPnlLoading(false); });
+    };
     const loadPnl = () => {
       const requestId = ++pnlRequestRef.current;
       setPortfolioPnlLoading(true);
       setPortfolioPnlError('');
       const lastDay = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 0).getDate();
       const endDate = `${monthKey}-${String(lastDay).padStart(2, '0')}`;
-      void getDailyPnl(`${monthKey}-01`, endDate)
-        .then(result => { if (active && requestId === pnlRequestRef.current) setPortfolioPnl(result); })
-        .catch(error => { if (active && requestId === pnlRequestRef.current) setPortfolioPnlError(error instanceof Error ? error.message : 'Unable to calculate daily P&L.'); })
-        .finally(() => { if (active && requestId === pnlRequestRef.current) setPortfolioPnlLoading(false); });
+      const calendarEnd = endDate > today ? today : endDate;
+      if (`${monthKey}-01` > today) {
+        setPortfolioPnl({ baseline_date: null, days: [], month_summary: {}, warnings: [], incomplete_dates: [] });
+        setPortfolioPnlLoading(false);
+      } else {
+        void getDailyPnl(`${monthKey}-01`, calendarEnd)
+          .then(result => {
+            if (active && requestId === pnlRequestRef.current) {
+              setPortfolioPnl(result);
+              if (monthKey === currentMonth) {
+                setOverviewPnl(result);
+                setOverviewPnlError('');
+                setOverviewPnlLoading(false);
+              }
+            }
+          })
+          .catch(error => { if (active && requestId === pnlRequestRef.current) setPortfolioPnlError(error instanceof Error ? error.message : 'Unable to calculate daily P&L.'); })
+          .finally(() => { if (active && requestId === pnlRequestRef.current) setPortfolioPnlLoading(false); });
+      }
+      if (monthKey !== currentMonth) loadOverviewPnl(requestId);
     };
     const handleSnapshotChanged = (event: Event) => {
       const snapshotDate = (event as CustomEvent<PortfolioSnapshotChangedDetail>).detail?.date;
@@ -198,15 +232,20 @@ export default function Home() {
       }
       loadPnl();
     };
+    const schedulePnlReload = () => {
+      window.clearTimeout(pnlReloadTimer);
+      pnlReloadTimer = window.setTimeout(loadPnl, 120);
+    };
     loadPnl();
-    window.addEventListener(DAILY_REVIEW_INPUTS_CHANGED, loadPnl);
+    window.addEventListener(DAILY_REVIEW_INPUTS_CHANGED, schedulePnlReload);
     window.addEventListener(PORTFOLIO_SNAPSHOT_CHANGED, handleSnapshotChanged);
     return () => {
       active = false;
-      window.removeEventListener(DAILY_REVIEW_INPUTS_CHANGED, loadPnl);
+      window.clearTimeout(pnlReloadTimer);
+      window.removeEventListener(DAILY_REVIEW_INPUTS_CHANGED, schedulePnlReload);
       window.removeEventListener(PORTFOLIO_SNAPSHOT_CHANGED, handleSnapshotChanged);
     };
-  }, [monthKey]);
+  }, [monthKey, todayDate, todayMonthKey]);
 
   const pnlByDate = new Map((portfolioPnl?.days || []).map(item => [item.date, item]));
   const monthPnlEntries = Object.entries(portfolioPnl?.month_summary?.pnl_by_currency || {});
@@ -253,13 +292,13 @@ export default function Home() {
           "relative transition-all duration-300",
           onboardingStep === 1 ? "z-[101] ring-4 ring-white/60 shadow-2xl scale-[1.02]" : "z-10"
         )}>
-          <HoldingsSnapshotModule />
+          <HoldingsSnapshotModule pnl={overviewPnl} loading={overviewPnlLoading} error={overviewPnlError} />
 
           {onboardingStep === 1 && (
             <div className="absolute top-full left-0 right-0 mt-4 bg-white rounded-xl p-3.5 shadow-xl animate-in fade-in slide-in-from-top-2 z-[102] pointer-events-auto text-left">
               <div className="absolute -top-2 left-8 w-4 h-4 bg-white rotate-45 rounded-sm"></div>
               <div className="relative z-10 text-[#0B2545] text-[12px] font-medium leading-relaxed mb-3">
-                Import a dated holdings snapshot to see your latest total assets and portfolio P&amp;L here.
+                Choose a security and import its complete trade history to build the position and P&amp;L view.
               </div>
               <div className="flex justify-end">
                 <button 
@@ -275,7 +314,7 @@ export default function Home() {
         
         {/* Trading Calendar */}
         <div className="relative z-10">
-          <div className="bg-white/90 backdrop-blur-md rounded-xl p-2.5 border border-white shadow-[0_4px_12px_rgba(11,37,69,0.03)] relative z-10 overflow-hidden">
+          <div className="rounded-xl border border-slate-100 bg-white p-3 shadow-[0_4px_16px_rgba(11,37,69,0.05)] relative z-10 overflow-hidden">
             <div className="flex justify-between items-center gap-2 mb-1.5 ml-1">
               <div className="flex min-w-0 items-center gap-1.5">
                 <h2 className="shrink-0 text-[14px] font-bold text-[#0B2545] tracking-tight">Trading Calendar</h2>
@@ -338,14 +377,20 @@ export default function Home() {
                   : pnlEntries.length === 1 && pnlEntries[0][1] < 0
                     ? (isSelected ? 'text-rose-200' : 'text-rose-600')
                     : (isSelected ? 'text-white/70' : 'text-slate-400');
+                const pnlTotal = pnlEntries.reduce((sum, [, value]) => sum + value, 0);
+                const pnlCellTone = dayPnl?.complete && pnlTotal > 0
+                  ? isSelected ? '!bg-emerald-600 !text-white' : 'bg-emerald-100 text-emerald-800'
+                  : dayPnl?.complete && pnlTotal < 0
+                    ? isSelected ? '!bg-rose-600 !text-white' : 'bg-rose-100 text-rose-700'
+                    : isSelected ? '!bg-[#0B2545] !text-white' : 'bg-slate-50 text-slate-500';
                 return (
                   <button
                     key={day}
                     onClick={() => selectDate(dayKey)}
                     className={cn(
-                      "h-8 min-w-0 rounded-md px-0.5 flex flex-col items-center justify-center gap-0.5 leading-none transition-colors",
-                      "bg-slate-50 text-slate-500",
-                      isSelected && "!bg-[#0B2545] !text-white ring-1 ring-[#EE6C4D] shadow-sm cursor-pointer active:scale-95"
+                      "h-9 min-w-0 rounded-lg px-0.5 flex flex-col items-center justify-center gap-0.5 leading-none transition-colors",
+                      pnlCellTone,
+                      isSelected && "ring-1 ring-[#EE6C4D] shadow-sm cursor-pointer active:scale-95"
                     )}
                   >
                     <span className="text-[8px] font-bold">{day}</span>
@@ -431,7 +476,7 @@ export default function Home() {
         </div>
 
         {/* Trades Module (Migrated from Daily Review) */}
-        <TradesModule isCard={true} tradeDate={selectedDate} view="recent" />
+        <TradesModule isCard={true} tradeDate={selectedDate} view="day" />
 
         {/* My Notes Module */}
         <div id="notes-module" className="pt-1.5 pb-1 relative z-10">
@@ -492,14 +537,15 @@ export default function Home() {
           </div>
         </div>
 
-        {dailyReview && (dailyReview.trade_count > 0 || (dailyReview.trade_reviews?.length ?? 0) > 0) && (
+        {
           <div id="daily-trade-review" className="scroll-mt-20 pt-1.5 pb-1 relative z-10">
-            <div className="bg-white/90 rounded-xl border border-white p-3 shadow-[0_4px_12px_rgba(11,37,69,0.03)]">
+            <div className="rounded-xl border border-slate-100 bg-white p-3 shadow-[0_4px_16px_rgba(11,37,69,0.05)]">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <h2 className="flex items-center gap-1.5 text-[13px] font-bold text-[#0B2545]"><Sparkles size={13} className="text-[#EE6C4D]" /> Trade Review</h2>
                 <span className="text-[9px] font-mono text-slate-400">{selectedDateLabel}</span>
               </div>
-              {dailyReview.trade_review_stats && (
+              {reviewLoading ? <p className="mb-2 text-[10px] text-slate-400">Loading trade review…</p> : dailyReview?.trade_count === 0 ? <p className="mb-2 text-[10px] leading-relaxed text-slate-500">{dailyReview.trade_review_overview || 'No trades are recorded for this date. Generate will confirm that a trade review cannot be produced without trade records.'}</p> : null}
+              {(dailyReview?.trade_count ?? 0) > 0 && dailyReview?.trade_review_stats && (
                 <>
                 <div className="mb-1.5 grid grid-cols-4 gap-1.5">
                   {[
@@ -517,17 +563,17 @@ export default function Home() {
                 <p className="mb-2.5 text-right text-[8px] text-slate-400">Daily notes recorded: {dailyReview.trade_review_stats.daily_note_count}</p>
                 </>
               )}
-              {dailyReview.trade_review_overview && (
+              {dailyReview?.trade_count !== 0 && dailyReview?.trade_review_overview && (
                 <div className="mb-2.5 rounded-lg border border-[#0B2545]/10 bg-[#0B2545]/[0.03] p-2.5">
                   <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Execution conclusion</div>
                   <p className="text-[11px] font-medium leading-relaxed text-[#134074]">{dailyReview.trade_review_overview}</p>
                 </div>
               )}
-              {(dailyReview.trade_review_market_news?.length ?? 0) > 0 && (
+              {(dailyReview?.trade_review_market_news?.length ?? 0) > 0 && (
                 <div className="mb-2.5 rounded-lg border border-sky-100 bg-sky-50/60 p-2.5">
                   <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-sky-800">External market context · Tavily</div>
                   <div className="space-y-1.5">
-                    {dailyReview.trade_review_market_news?.slice(0, 3).map((item) => <div key={item.url} className="text-[9px] leading-relaxed text-slate-600">
+                    {dailyReview?.trade_review_market_news?.slice(0, 3).map((item) => <div key={item.url} className="text-[9px] leading-relaxed text-slate-600">
                       <a href={item.url} target="_blank" rel="noreferrer" className="font-semibold text-[#134074] underline decoration-slate-300 underline-offset-2">{item.title}</a>
                       <span className="ml-1 text-slate-400">{item.source}{item.published_date ? ` · ${item.published_date}` : ''}</span>
                       <p className="line-clamp-2 text-slate-500">{item.snippet}</p>
@@ -535,10 +581,10 @@ export default function Home() {
                   </div>
                 </div>
               )}
-              {!dailyReview.trade_review_market_news?.length && dailyReview.trade_review_market_news_warning && (
+              {!dailyReview?.trade_review_market_news?.length && dailyReview?.trade_count !== 0 && dailyReview?.trade_review_market_news_warning && (
                 <p className="mb-2.5 text-[9px] text-amber-700">External news context unavailable: {dailyReview.trade_review_market_news_warning}</p>
               )}
-              {dailyReview.trade_reviews?.length ? <div className="space-y-2">
+              {dailyReview?.trade_reviews?.length ? <div className="space-y-2">
                 {dailyReview.trade_reviews.map(item => (
                   <div key={item.trade_id} className="rounded-lg border border-slate-100 bg-slate-50 p-2.5">
                     <div className="mb-1 text-[11px] font-bold text-[#0B2545]">{item.symbol}</div>
@@ -558,25 +604,26 @@ export default function Home() {
                     )}
                   </div>
                 ))}
-              </div> : <p className="mb-2 text-[10px] text-slate-500">No trade review generated for this day yet.</p>}
-              {(dailyReview.trade_review_focus?.length ?? 0) > 0 && (
+              </div> : dailyReview?.trade_count !== 0 && <p className="mb-2 text-[10px] text-slate-500">No trade review generated for this day yet.</p>}
+              {(dailyReview?.trade_review_focus?.length ?? 0) > 0 && (
                 <div className="mt-2.5 rounded-lg border border-amber-100 bg-amber-50/70 p-2.5">
                   <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-amber-700">Focus next</div>
                   <ul className="space-y-1 text-[10px] leading-relaxed text-amber-900">
-                    {dailyReview.trade_review_focus.map((item, index) => <li key={`${index}-${item}`}>• {item}</li>)}
+                    {dailyReview?.trade_review_focus?.map((item, index) => <li key={`${index}-${item}`}>• {item}</li>)}
                   </ul>
                 </div>
               )}
               <div className="flex items-center justify-between gap-2">
                 {tradeReviewsStale && <p className="text-[9px] font-medium text-amber-700">Trades or notes changed. Regenerate this review.</p>}
-                <button onClick={() => void handleGenerateTradeReviews()} disabled={tradeReviewsGenerating} className="ml-auto rounded-lg bg-[#0B2545] px-2.5 py-1.5 text-[10px] font-bold text-white disabled:opacity-60">
-                  {tradeReviewsGenerating ? 'Analyzing…' : dailyReview.trade_reviews?.length ? 'Regenerate' : 'Generate trade review'}
+                {tradeReviewError && <p role="alert" className="text-[9px] text-rose-600">{tradeReviewError}</p>}
+                <button onClick={() => void handleGenerateTradeReviews()} disabled={reviewLoading || tradeReviewsGenerating} className="ml-auto rounded-lg bg-[#0B2545] px-2.5 py-1.5 text-[10px] font-bold text-white disabled:opacity-60">
+                  {tradeReviewsGenerating ? 'Analyzing…' : dailyReview?.trade_reviews?.length ? 'Regenerate' : 'Generate trade review'}
                 </button>
               </div>
-              {dailyReview.trade_reviews_generated_at && <p className="mt-2 text-right text-[9px] text-slate-400">Generated {new Date(dailyReview.trade_reviews_generated_at).toLocaleString('en-US')}</p>}
+              {dailyReview?.trade_reviews_generated_at && <p className="mt-2 text-right text-[9px] text-slate-400">Generated {new Date(dailyReview.trade_reviews_generated_at).toLocaleString('en-US')}</p>}
             </div>
           </div>
-        )}
+        }
 
       </div>
 

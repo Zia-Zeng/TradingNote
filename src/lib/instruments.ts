@@ -29,6 +29,7 @@ export function inferMarketCurrency(code: string): { market: MarketCode; currenc
   const normalized = code.trim().toUpperCase();
   if (/\.HK$/.test(normalized)) return { market: 'HK', currency: 'HKD' };
   if (/\.(SH|SS|SZ|BJ)$/.test(normalized) || /^\d{6}$/.test(normalized)) return { market: 'CN', currency: 'CNY' };
+  if (/^0\d{3,4}$/.test(normalized)) return { market: 'HK', currency: 'HKD' };
   if (/-USD$/.test(normalized)) return { market: 'CRYPTO', currency: 'USD' };
   const globalSuffixes: Array<[RegExp, string]> = [
     [/\.T$/, 'JPY'], [/\.L$/, 'GBP'], [/\.(DE|F|PA|AS|BR|HE)$/, 'EUR'],
