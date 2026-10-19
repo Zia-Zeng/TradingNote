@@ -40,6 +40,8 @@ def _date_text(value: date | str) -> str:
 
 
 def _wind_code(code: str) -> str:
+    if re.fullmatch(r"[A-Z][A-Z0-9.-]{0,15}", code) and not re.fullmatch(r"\d{6}", code):
+        return code if code.endswith((".O", ".N")) else f"{code}.O"
     if code.startswith(("5", "6", "9")):
         exchange = "SH"
     elif code.startswith(("4", "8")):
@@ -344,15 +346,52 @@ async def _wind_history(code: str, start: str, end: str) -> list[dict[str, Any]]
             tool_name, schema, use_router = await _wind_resolve_tool(
                 session, tools, "get_stock_kline", question
             )
-            args = _wind_tool_args(schema, code, start, end)
-            result = await _wind_call_tool(session, tools, tool_name, args, use_router)
-            if getattr(result, "isError", False):
-                raise RuntimeError("Wind kline request failed.")
-            rows = _rows_from_payload(_wind_payload(result))
-            bars = _normalize_rows(rows, start, end)
-            if not bars:
-                raise RuntimeError("Wind returned no usable daily bars.")
-            return bars
+            candidates = [wind_code]
+            if wind_code.endswith(".O") and code == code.split(".")[0]:
+                candidates.append(f"{code}.N")
+            for candidate in candidates:
+                args = _wind_tool_args(schema, candidate, start, end)
+                result = await _wind_call_tool(session, tools, tool_name, args, use_router)
+                if getattr(result, "isError", False):
+                    continue
+                try:
+                    rows = _rows_from_payload(_wind_payload(result))
+                except RuntimeError:
+                    continue
+                bars = _normalize_rows(rows, start, end)
+                if bars:
+                    return bars
+            raise RuntimeError("Wind returned no usable daily bars.")
+
+
+async def fetch_us_history(
+    code: str, start_date: date | str, end_date: date | str,
+    required_fields: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Fetch US daily bars from Wind, then Yahoo when Wind is unavailable."""
+    symbol = code.strip().upper()
+    if not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,15}", symbol):
+        raise ValueError("A valid US stock ticker is required.")
+    start, end = _date_text(start_date), _date_text(end_date)
+    if start > end:
+        raise ValueError("start_date must be earlier than or equal to end_date.")
+    failures: list[dict[str, str]] = []
+    try:
+        bars = await asyncio.wait_for(_wind_history(symbol, start, end), timeout=12)
+        if not bars or any(any(field not in bar for field in required_fields) for bar in bars):
+            raise RuntimeError("Wind returned incomplete daily bars.")
+        return _response(symbol, bars, "Wind Finmarket", ["Wind Finmarket"], failures)
+    except Exception as exc:
+        logger.warning("US market data Wind request failed: %s", type(exc).__name__)
+        failures.append({"provider": "Wind Finmarket", "reason": type(exc).__name__})
+    yahoo_symbol = re.sub(r"\.(?:O|N)$", "", symbol)
+    result = await asyncio.wait_for(run_in_threadpool(_yahoo_history, yahoo_symbol, start, end), timeout=14)
+    bars = result.get("bars", [])
+    if not bars:
+        raise RuntimeError("US stock price history is unavailable.")
+    if any(any(field not in bar for field in required_fields) for bar in bars):
+        raise RuntimeError("US stock price history is missing required fields.")
+    return _response(symbol, bars, "Yahoo Finance", ["Wind Finmarket", "Yahoo Finance"], failures)
 
 
 async def fetch_a_share_history(code: str, start_date: date | str, end_date: date | str) -> dict[str, Any]:
@@ -363,7 +402,7 @@ async def fetch_a_share_history(code: str, start_date: date | str, end_date: dat
     if start > end:
         raise ValueError("start_date must be earlier than or equal to end_date.")
 
-    provider_order = os.getenv("MARKET_DATA_PROVIDER_ORDER", "yahoo,baostock,akshare,wind")
+    provider_order = os.getenv("MARKET_DATA_PROVIDER_ORDER", "wind,baostock,akshare,yahoo")
     key = (normalized_code, start, end, provider_order)
     cached = _HISTORY_CACHE.get(key)
     if cached and cached[0] > monotonic():
@@ -385,16 +424,8 @@ async def fetch_a_share_history(code: str, start_date: date | str, end_date: dat
 async def _fetch_a_share_history_uncached(normalized_code: str, start: str, end: str) -> dict[str, Any]:
     """Fetch unadjusted A-share daily bars, falling back in configured order."""
 
-    # BaoStock is the most reliable local fallback in the desktop runtime.
-    # AkShare's Eastmoney endpoint can be blocked by the machine proxy, so keep
-    # it available without making every request wait on it before BaoStock.
-    # Yahoo's chart endpoint has a bounded HTTP timeout and does not require the
-    # Wind MCP session handshake. Try it first so a stalled MCP connection can
-    # never prevent ordinary A-share daily bars from reaching the calendar.
-    configured = os.getenv("MARKET_DATA_PROVIDER_ORDER", "yahoo,baostock,akshare,wind")
+    configured = os.getenv("MARKET_DATA_PROVIDER_ORDER", "wind,baostock,akshare,yahoo")
     provider_order = [name.strip().lower() for name in configured.split(",") if name.strip()]
-    if "yahoo" not in provider_order:
-        provider_order.insert(0, "yahoo")
     providers = {"yahoo": "Yahoo Finance", "wind": "Wind Finmarket", "akshare": "AkShare", "baostock": "BaoStock"}
     unknown = [name for name in provider_order if name not in providers]
     if unknown:
@@ -477,7 +508,7 @@ def _yahoo_history(code: str, start_date: str, end_date: str) -> dict[str, Any]:
             "date": datetime.fromtimestamp(int(timestamp), market_timezone).date().isoformat(),
             "close": value,
         }
-        for field in ("open", "high", "low"):
+        for field in ("open", "high", "low", "volume"):
             values = quotes.get(field) or []
             if index < len(values):
                 field_value = _number(values[index])
@@ -488,7 +519,7 @@ def _yahoo_history(code: str, start_date: str, end_date: str) -> dict[str, Any]:
 
 
 async def fetch_daily_history(code: str, market: str, start_date: date | str, end_date: date | str) -> dict[str, Any]:
-    """Use the configured mainland providers for A-shares and Yahoo daily bars elsewhere."""
+    """Use market-specific daily history providers with cached results."""
     normalized_market = str(market or "").upper()
     normalized_code = str(code or "").strip()
     start, end = _date_text(start_date), _date_text(end_date)
@@ -499,6 +530,8 @@ async def fetch_daily_history(code: str, market: str, start_date: date | str, en
             return cached[1]
     if normalized_market == "CN" and re.fullmatch(r"\d{6}(?:\.(?:SH|SZ|BJ|SS))?", normalized_code, re.IGNORECASE):
         result = await fetch_a_share_history(normalized_code[:6], start, end)
+    elif normalized_market == "US":
+        result = await fetch_us_history(normalized_code, start, end)
     else:
         yahoo_code = f"{normalized_code}.HK" if normalized_market == "HK" and re.fullmatch(r"\d{1,5}", normalized_code) else normalized_code
         result = await asyncio.wait_for(run_in_threadpool(_yahoo_history, yahoo_code, start, end), timeout=14)

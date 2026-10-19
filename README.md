@@ -23,6 +23,24 @@ The repository deploys the current `main` branch through GitHub Actions. Each pu
 
 The site is a static prototype and does not connect to a brokerage or trading API.
 
+### Agent Backtest
+
+The Agent Backtest page offers five strategy presets for A-share codes such as `601899` and US tickers such as `AAPL`. Choose a 6-month, 1-year, or 3-year period and click **Run Test**. The default is three years. Results include a return curve starting at 0%, simulated buy/sell fill prices, total return, drawdown, and win rate on completed round trips after transaction costs. Zero percent means no completed round trip was profitable; no completed trades yield an unavailable rate.
+
+A-share requests run through SuperMind. US requests use a separate HTTP backtest worker. The Agent API obtains US daily OHLCV from Wind first, then Yahoo Finance, and sends only normalized bars and the selected preset to the worker. The worker runs daily, long only, with a 99% target weight, 0.1% commission, 0.1% fill slippage per side, and next-session-open fills. It uses a normalized wealth index with fractional shares, so US share quantities are implementation units and the UI displays fill prices only. Input history is unadjusted as reported by the market data API; corporate actions may affect long-period results. The worker is a standalone deterministic simulator, not Qlib or SuperMind. Its HTTP URL can point to another trusted host.
+
+Start the US worker in a separate PowerShell window from `backend`:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn us_backtest_worker.main:app --host 127.0.0.1 --port 8001
+```
+
+The Agent API uses `US_BACKTEST_WORKER_URL=http://127.0.0.1:8001` by default. For a remote worker, use an HTTPS URL and set the same `US_BACKTEST_WORKER_TOKEN` in both process environments. Keep the worker behind access control. The Agent API must continue running on port 8000.
+
+Install the `supermind-quant-developer` skill runner on the backend host. Put `MGLLM_API_KEY` in `backend/.env` (never in frontend variables or source control), then restart the backend. The optional `SUPERMIND_RUNNER_PATH` points to the runner script when it is installed outside the default skill directory. `SUPERMIND_JUPYTER_WORKDIR` fixes a common remote directory for file synchronization and execution; its default is `mcp/tradingnote-backtests`.
+
+`POST /api/backtest/run` accepts `{ "strategy": "sma", "ticker": "AAPL", "months": 12 }` or an A-share code. Supported strategy IDs are `sma`, `rsi`, `macd`, `bollinger`, and `volume`; `months` accepts 6, 12, or 36 and defaults to 36. A-share runs use the existing remote engine defaults and pre-adjusted indicator history. Their completed results are cached for the same strategy, symbol, period, strategy code, and Shanghai calendar day. The API response and browser storage omit provider identity, remote job identifiers, and runner details. Result files, cache, and runner logs stay in `backend/.runtime/backtests/` and are ignored by Git.
+
 ### Daily Feed
 
 The Feed page requests `GET /api/feed`. The API finds a recent financial-market headline with Tavily, generates five English essays through DeepSeek using five distinct books from the configured reading list, and caches the edition in SQLite. Each article includes a title, up to 3 tags, a 20–30-word summary, and an approximately 300-word essay. A background task prepares the next edition at midnight Asia/Shanghai; opening Feed also creates that day's edition if the scheduled run was missed. Each essay discusses the shared headline and closes with cautious, evidence-based trading guidance.
@@ -86,7 +104,7 @@ The trade object keeps the frontend's existing field names: `type`, `motive.tags
 
 ### Market history and AI Tracking
 
-`GET /api/market/history/{code}?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` returns historical daily bars for six-digit mainland China A-share codes. Providers are tried in the order in `MARKET_DATA_PROVIDER_ORDER`, which defaults to Wind Finmarket MCP, AkShare, then BaoStock. Wind requires `WIND_MCP_BEARER_TOKEN`; when it is absent or a provider request fails, the next source is tried. Successful responses include `source`, `providers_tried`, `provider_failures`, `frequency`, `adjustment`, `as_of`, `latest_close`, `is_realtime`, and `bars`. All three integrations currently request unadjusted daily history; none is treated as a real-time quote feed. AkShare aggregates data from upstream public services, so availability and upstream data terms can vary.
+`GET /api/market/history/{code}?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` returns historical daily bars for six-digit mainland China A-share codes. Providers are tried in the order in `MARKET_DATA_PROVIDER_ORDER`, which defaults to Wind Finmarket MCP, BaoStock, AkShare, then Yahoo Finance. Wind requires `WIND_MCP_BEARER_TOKEN`; when it is absent or a provider request fails, the next source is tried. The shared `fetch_daily_history` helper uses Wind first and Yahoo Finance second for US stocks; BaoStock only supplies A-share history. Successful responses include `source`, `providers_tried`, `provider_failures`, `frequency`, `adjustment`, `as_of`, `latest_close`, `is_realtime`, and `bars`. These integrations request unadjusted daily history, not real-time quotes.
 
 `POST /api/tracking/analyze` accepts the current Detail page field names and returns the four-field `analysis` object consumed by the UI. It uses the transaction timeline and available daily bars around entry/exit dates, retrieves dated asset and market news snippets through Tavily Search when `TAVILY_API_KEY` is configured, then asks DeepSeek to produce the four analysis strings as JSON. News retrieval uses the `news` topic, searches the last 30 days independently of the last trade date, and discards results without an asset match. If relevant market news is unavailable, the prompt tells the model to disclose that limitation without inventing news or macro factors. Wind remains the first configured source for A-share daily bars; it is no longer used for Tracking news.
 

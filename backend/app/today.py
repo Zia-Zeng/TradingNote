@@ -1112,7 +1112,7 @@ def _cached_portfolio_response(
         },
         "warnings": warnings,
         "incomplete_dates": [day["date"] for day in days if not day.get("complete")],
-        "source": "Yahoo Finance first, then BaoStock/AkShare/Wind for A-shares; Yahoo Finance for other tickers",
+        "source": "Wind first, then BaoStock/AkShare/Yahoo for A-shares; Wind then Yahoo for US stocks; Yahoo for other tickers",
         "currency_policy": "Original currencies are retained; no FX conversion is applied.",
         "cache_hit": True,
     }
@@ -1227,7 +1227,7 @@ async def get_portfolio_pnl(
             for code, error in unavailable[:8]
         )
         result["warnings"].insert(0, "Closing-price history unavailable for: " + details + (" and others." if len(unavailable) > 8 else "."))
-    result["source"] = "Yahoo Finance first, then BaoStock/AkShare/Wind for A-shares; Yahoo Finance for other tickers"
+    result["source"] = "Wind first, then BaoStock/AkShare/Yahoo for A-shares; Wind then Yahoo for US stocks; Yahoo for other tickers"
     result["currency_policy"] = "Original currencies are retained; no FX conversion is applied."
     result["cache_hit"] = False
     with database() as connection:
