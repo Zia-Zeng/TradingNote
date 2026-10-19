@@ -4,6 +4,8 @@ import { ChevronLeft, Sparkles, Edit3, X, Plus, BotMessageSquare } from 'lucide-
 import { cn } from '../lib/utils';
 import TradesModule from '../components/TradesModule';
 import { readLocalResult, SAVED_RESULTS_EVENT } from '../lib/saved-results';
+import { formatNoteDate, localDate, useDailyNotes } from '../lib/daily-notes';
+import ExpandableNoteText from '../components/ExpandableNoteText';
 
 type SavedTracking = { title: string; body: string; savedAt: string };
 
@@ -13,9 +15,8 @@ export default function DailyDetail() {
   const [reviewVersion, setReviewVersion] = useState(0);
   const [savedTracking, setSavedTracking] = useState<SavedTracking | null>(null);
 
-  const [attentionNotes, setAttentionNotes] = useState([
-    { id: 1, text: "Focus on sector rotation into defensive stocks before weekend.", time: "Jul 14, 15:20" }
-  ]);
+  const noteDate = date || localDate();
+  const { notes: attentionNotes, error: notesError, add: addNote, remove: removeNote } = useDailyNotes(noteDate);
   const [newAttentionNote, setNewAttentionNote] = useState('');
 
   useEffect(() => {
@@ -31,10 +32,12 @@ export default function DailyDetail() {
     return () => window.removeEventListener(SAVED_RESULTS_EVENT, sync);
   }, [date]);
 
-  const handleAddAttentionNote = () => {
+  const handleAddAttentionNote = async () => {
     if (newAttentionNote.trim()) {
-      setAttentionNotes([{ id: Date.now(), text: newAttentionNote, time: "Jul 14, 16:00" }, ...attentionNotes]);
-      setNewAttentionNote('');
+      try {
+        await addNote(newAttentionNote);
+        setNewAttentionNote('');
+      } catch { /* The shared note hook exposes the request error below. */ }
     }
   };
 
@@ -89,16 +92,15 @@ export default function DailyDetail() {
             <div className="text-[14px] font-bold text-[#0B2545] flex items-center gap-1.5">
               <Edit3 size={16} className="text-[#EE6C4D]" /> My notes
             </div>
-            <div className="text-[10px] text-slate-400 font-mono font-medium">{newAttentionNote.length}/140</div>
           </div>
           
           <div className="flex gap-2 mb-4">
-            <input 
-              type="text"
+            <textarea
               value={newAttentionNote}
-              onChange={(e) => setNewAttentionNote(e.target.value.slice(0, 140))}
+              maxLength={500}
+              onChange={(e) => setNewAttentionNote(e.target.value.slice(0, 500))}
               placeholder="What did you learn today?"
-              className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-[12px] focus:outline-none focus:border-[#EE6C4D] placeholder:text-slate-400 text-[#0B2545] shadow-sm transition-colors min-w-0"
+              className="flex-1 min-h-10 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-[12px] focus:outline-none focus:border-[#EE6C4D] placeholder:text-slate-400 text-[#0B2545] shadow-sm transition-colors min-w-0 resize-y"
             />
             <button 
               onClick={handleAddAttentionNote}
@@ -116,24 +118,23 @@ export default function DailyDetail() {
             {attentionNotes.map(note => (
               <div key={note.id} className="bg-[#EE6C4D]/5 border border-[#EE6C4D]/20 rounded-xl p-3 relative group">
                 <button 
-                  onClick={() => setAttentionNotes(attentionNotes.filter(n => n.id !== note.id))}
+                  onClick={() => void removeNote(note.id).catch(() => undefined)}
                   className="absolute top-2 right-2 text-slate-400 hover:text-slate-600 p-1"
                 >
                   <X size={14} />
                 </button>
                 <div className="flex items-start gap-2 pr-6">
                   <div className="w-1.5 h-1.5 rounded-full bg-[#EE6C4D] shrink-0 mt-1.5"></div>
-                  <p className="text-[12px] text-[#0B2545] leading-relaxed font-medium">
-                    {note.text}
-                  </p>
+                  <ExpandableNoteText text={note.text} className="text-[12px] text-[#0B2545] leading-relaxed font-medium" />
                 </div>
                 <div className="text-[10px] text-slate-400 font-mono mt-2 ml-3.5">
-                  {note.time}
+                  {formatNoteDate(note)}
                 </div>
               </div>
             ))}
 
           </div>
+          {notesError && <p role="alert" className="text-[10px] text-rose-600">{notesError}</p>}
         </div>
 
         {/* AI TradingNote */}

@@ -3,16 +3,22 @@ import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Search, Tag, Target, Image as ImageIcon, CheckCircle2, Plus, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { apiRequest } from '../lib/api';
+import { currentLocalDate, hasTradeDate, tradeDateTimeFields } from '../lib/trade-time';
+import { defaultCurrencyForMarket, inferMarketCurrency, type InstrumentSearchResult } from '../lib/instruments';
+import TradeImportDrawer from './TradeImportDrawer';
 
 interface RecordDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   initialData?: any;
   onSave?: (data: any) => void | Promise<void>;
+  onImported?: (items: any[]) => void;
   defaultTab?: 'manual' | 'ocr';
+  defaultTradeDate?: string;
 }
 
-export default function RecordDrawer({ isOpen, onClose, initialData, onSave, defaultTab = 'manual' }: RecordDrawerProps) {
+export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onImported, defaultTab = 'manual', defaultTradeDate }: RecordDrawerProps) {
   const buyMotiveOptions = ['Breakout Confirmation', 'Pullback Entry', 'Support Bounce', 'Trend Continuation', 'Catalyst', 'Re-entry'];
   const sellMotiveOptions = ['Take Profit', 'Stop Loss', 'Resistance Rejection', 'Trend Reversal', 'Risk Reduction', 'Thesis Invalidated'];
   const [isAddingTag, setIsAddingTag] = useState(false);
@@ -25,10 +31,19 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, def
   const [showSuccess, setShowSuccess] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [stockOptions, setStockOptions] = useState<InstrumentSearchResult[]>([]);
+  const [stockSearchOpen, setStockSearchOpen] = useState(false);
+  const [stockSearchUnavailable, setStockSearchUnavailable] = useState(false);
+  const [isSearchingStocks, setIsSearchingStocks] = useState(false);
 
   // Form state
   const [symbol, setSymbol] = useState('');
   const [code, setCode] = useState('');
+  const [market, setMarket] = useState('CN');
+  const [currency, setCurrency] = useState('CNY');
+  const [assetClass, setAssetClass] = useState('Stock');
+  const [tradeDate, setTradeDate] = useState(currentLocalDate);
+  const [tradeClock, setTradeClock] = useState('');
   const [direction, setDirection] = useState<'Buy' | 'Sell'>('Buy');
   const [price, setPrice] = useState('');
   const [qty, setQty] = useState('');
@@ -42,9 +57,46 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, def
   const [sl, setSl] = useState('');
 
   useEffect(() => {
+    const query = symbol.trim();
+    if (!isOpen || activeTab !== 'manual' || !stockSearchOpen || !query) {
+      setStockOptions([]);
+      setIsSearchingStocks(false);
+      setStockSearchUnavailable(false);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      setIsSearchingStocks(true);
+      try {
+        const result = await apiRequest<{ items: InstrumentSearchResult[]; available?: boolean }>(`/api/stocks/search?q=${encodeURIComponent(query)}`);
+        if (!cancelled) {
+          setStockOptions(result.items || []);
+          setStockSearchUnavailable(result.available === false);
+        }
+      } catch {
+        if (!cancelled) {
+          setStockOptions([]);
+          setStockSearchUnavailable(true);
+        }
+      } finally {
+        if (!cancelled) setIsSearchingStocks(false);
+      }
+    }, 250);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [symbol, isOpen, activeTab, stockSearchOpen]);
+
+  useEffect(() => {
     if (initialData) {
       setSymbol(initialData.symbol || '');
       setCode(initialData.code || '');
+      const inferred = inferMarketCurrency(initialData.code || initialData.symbol || '');
+      const knownMarkets = ['CN', 'HK', 'US', 'CRYPTO', 'GLOBAL'];
+      setMarket(knownMarkets.includes(initialData.market) ? initialData.market : (inferred.market === 'GLOBAL' ? 'CN' : inferred.market));
+      setCurrency(initialData.currency || inferred.currency);
+      setAssetClass(initialData.asset_class || 'Stock');
+      const tradeDateTime = tradeDateTimeFields(initialData.time);
+      setTradeDate(hasTradeDate(initialData.time) ? tradeDateTime.date : '');
+      setTradeClock(tradeDateTime.time);
       setDirection(initialData.type === 'Sell' ? 'Sell' : 'Buy');
       setPrice(initialData.price || '');
       setQty(initialData.qty || '');
@@ -59,11 +111,11 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, def
       setMotiveDesc(initialData.motive?.desc || '');
       setActiveTab('manual');
     } else {
-      setSymbol(''); setCode(''); setPrice(''); setQty(''); setTags([]); setCustomTags([]); setNewTag('');
+      setSymbol(''); setCode(''); setMarket('CN'); setCurrency('CNY'); setAssetClass('Stock'); setTradeDate(defaultTradeDate || currentLocalDate()); setTradeClock(''); setPrice(''); setQty(''); setTags([]); setCustomTags([]); setNewTag('');
       setTp(''); setSl(''); setPlanDesc(''); setMotiveDesc(''); setPosTag('Close'); setDirection('Buy');
       setActiveTab(defaultTab);
     }
-  }, [initialData, isOpen, defaultTab]);
+  }, [initialData, isOpen, defaultTab, defaultTradeDate]);
 
   const toggleTag = (tag: string) => {
     if (tags.includes(tag)) setTags(tags.filter(t => t !== tag));
@@ -100,12 +152,18 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, def
 
   const handleSave = async () => {
     setSaveError(null);
-    if (code && !/^\d{6}$/.test(code)) {
-      setSaveError('A 股代码请填写 6 位数字；不确定时可以留空。');
+    if (!tradeDate) {
+      setSaveError('Enter a trade date.');
+      return;
+    }
+    const inferred = inferMarketCurrency(code || symbol);
+    const originalCurrency = (currency || inferred.currency).trim().toUpperCase();
+    if (!originalCurrency) {
+      setSaveError('Enter the original trading currency (for example, USD or HKD).');
       return;
     }
     const data = {
-      symbol, code: code || undefined, direction, price, qty, posTag, tags, tp, sl, planDesc, motiveDesc
+      symbol, code: code || undefined, market, currency: originalCurrency, assetClass, tradeDate, tradeClock, direction, price, qty, posTag, tags, tp, sl, planDesc, motiveDesc
     };
     setIsSaving(true);
     try {
@@ -115,10 +173,10 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, def
       } else {
         setShowSuccess(true);
         setTimeout(() => setShowSuccess(false), 2000);
-        setSymbol(''); setCode(''); setPrice(''); setQty(''); setTp(''); setSl(''); setPlanDesc(''); setMotiveDesc('');
+        setSymbol(''); setCode(''); setMarket('CN'); setCurrency('CNY'); setAssetClass('Stock'); setTradeDate(currentLocalDate()); setTradeClock(''); setPrice(''); setQty(''); setTp(''); setSl(''); setPlanDesc(''); setMotiveDesc('');
       }
     } catch (error) {
-      setSaveError(error instanceof Error ? error.message : '保存失败，请重试。');
+      setSaveError(error instanceof Error ? error.message : 'Unable to save the trade. Please try again.');
     } finally {
       setIsSaving(false);
     }
@@ -163,7 +221,7 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, def
                     onClick={() => setActiveTab('ocr')}
                     className={cn("flex-1 py-1.5 text-[11px] font-bold rounded-md transition-all", activeTab === 'ocr' ? "bg-[#0B2545] text-white shadow-sm" : "text-slate-500 hover:text-slate-700")}
                   >
-                    Batch Import (OCR)
+                    Batch Import
                   </button>
                 </div>
               </div>
@@ -173,34 +231,52 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, def
               {activeTab === 'manual' ? (
                 <div className="p-3 pb-8 space-y-4">
                   {/* Basic Info */}
-                  <div className="bg-white p-3 rounded-xl shadow-sm border border-slate-200 relative overflow-hidden">
+                  <div className="bg-white p-3 rounded-xl shadow-sm border border-slate-200 relative">
                     <div className="absolute top-0 left-0 w-1 h-full bg-[#EE6C4D]"></div>
-                    <div className="flex items-center gap-2 mb-3">
-                      <Search size={14} className="text-slate-400" />
+                    <div className="relative mb-3">
+                      <div className="flex items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-2 focus-within:border-[#EE6C4D]">
+                        <Search size={14} className="shrink-0 text-slate-400" />
                       <input 
-                        value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-                        placeholder="Search stock code / name"
-                        className="flex-1 bg-transparent text-[14px] font-bold text-[#0B2545] focus:outline-none placeholder:text-slate-300 font-mono"
+                          value={symbol}
+                          onFocus={() => setStockSearchOpen(true)}
+                          onChange={(e) => { const value = e.target.value; setSymbol(value); setCode(/^[A-Za-z0-9.^=_:-]+$/.test(value.trim()) ? value.trim() : ''); const inferred = inferMarketCurrency(value); setMarket(inferred.market); setCurrency(inferred.currency); setAssetClass(inferred.market === 'CRYPTO' ? 'Crypto' : 'Stock'); setStockSearchOpen(true); }}
+                          onKeyDown={(e) => { if (e.key === 'Escape') setStockSearchOpen(false); }}
+                          placeholder="Search global stocks, ETFs, funds, crypto…"
+                          autoComplete="off"
+                          className="min-w-0 flex-1 bg-transparent text-[14px] font-bold text-[#0B2545] focus:outline-none placeholder:text-slate-300"
                       />
+                      </div>
+                      {stockSearchOpen && (stockOptions.length > 0 || isSearchingStocks || stockSearchUnavailable) && (
+                        <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-xl">
+                          {stockOptions.map(option => (
+                            <button key={`${option.market}:${option.code}`} type="button" onMouseDown={event => event.preventDefault()} onClick={() => { setSymbol(option.name); setCode(option.code); setMarket(option.market); setCurrency(option.currency); setAssetClass(option.asset_class); setStockSearchOpen(false); }} className="flex w-full items-center justify-between border-b border-slate-100 px-3 py-2 text-left last:border-0 hover:bg-slate-50">
+                              <span className="truncate text-[12px] font-semibold text-[#0B2545]">{option.name}<span className="ml-1.5 font-mono text-[9px] text-slate-400">{option.market} · {option.asset_class}</span></span><span className="ml-3 shrink-0 font-mono text-[11px] text-slate-500">{option.code}</span>
+                            </button>
+                          ))}
+                          {isSearchingStocks && <div className="px-3 py-2 text-[10px] text-slate-400">Searching…</div>}
+                          {!isSearchingStocks && stockSearchUnavailable && stockOptions.length === 0 && <div className="px-3 py-2 text-[10px] text-slate-500">Stock search is unavailable. You can still enter a name or 6-digit code.</div>}
+                          {!isSearchingStocks && !stockSearchUnavailable && stockOptions.length === 0 && <div className="px-3 py-2 text-[10px] text-slate-500">No matches. You can use the text you entered.</div>}
+                        </div>
+                      )}
                     </div>
-                    <div className="mb-3">
-                      <label className="mb-1 block text-[9px] font-bold uppercase tracking-wider text-slate-400">A 股代码（可选）</label>
-                      <input
-                        value={code}
-                        onChange={event => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
-                        inputMode="numeric"
-                        maxLength={6}
-                        placeholder="6 位代码；不确定时留空"
-                        className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-2 font-mono text-[12px] text-[#0B2545] placeholder:text-slate-300 focus:border-[#EE6C4D] focus:outline-none"
-                      />
+                    <div className="mb-3 grid grid-cols-2 gap-2">
+                      <label className="block">
+                        <span className="mb-1 block text-[9px] font-bold uppercase tracking-wider text-slate-400">Trade date (required)</span>
+                        <input lang="en-US" type="date" required value={tradeDate} onChange={event => setTradeDate(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 font-mono text-[11px] text-[#0B2545] focus:border-[#EE6C4D] focus:outline-none" />
+                      </label>
+                      <label className="block">
+                        <span className="mb-1 block text-[9px] font-bold uppercase tracking-wider text-slate-400">Trade time (optional)</span>
+                        <input lang="en-US" type="time" value={tradeClock} onChange={event => setTradeClock(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 font-mono text-[11px] text-[#0B2545] focus:border-[#EE6C4D] focus:outline-none" />
+                      </label>
                     </div>
+                    {initialData && !hasTradeDate(initialData.time) && <p className="-mt-2 mb-3 text-[9px] leading-4 text-amber-700">This older record has no saved date. Select the actual trade date; it cannot be recovered from the original record.</p>}
                     <div className="flex items-center gap-2 mb-3">
                       <button onClick={() => changeDirection('Buy')} className={cn("flex-1 py-1.5 rounded-lg text-[11px] font-bold border-2 transition-colors", direction === 'Buy' ? "bg-emerald-50 text-emerald-700 border-emerald-400" : "bg-white text-slate-400 border-slate-200")}>Buy</button>
                       <button onClick={() => changeDirection('Sell')} className={cn("flex-1 py-1.5 rounded-lg text-[11px] font-bold border-2 transition-colors", direction === 'Sell' ? "bg-rose-50 text-rose-600 border-rose-400" : "bg-white text-slate-400 border-slate-200")}>Sell</button>
                     </div>
                     <div className="flex gap-3 text-[12px] bg-slate-50 p-2.5 rounded-lg border border-slate-100">
                       <div className="flex flex-col flex-1">
-                        <span className="text-slate-400 text-[9px] uppercase mb-0.5 tracking-wider">Price</span>
+                        <span className="text-slate-400 text-[9px] uppercase mb-0.5 tracking-wider">Price ({currency || '—'})</span>
                         <input value={price} onChange={e => setPrice(e.target.value)} type="number" placeholder="0.00" className="bg-transparent font-bold text-[#0B2545] font-mono text-[14px] focus:outline-none placeholder:text-slate-300 w-full" />
                       </div>
                       <div className="w-px bg-slate-200 self-stretch my-1"></div>
@@ -278,15 +354,7 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, def
                     />
                   </div>
                 </div>
-              ) : (
-                <div className="flex-1 flex flex-col items-center justify-center p-6 h-full mt-10">
-                  <div className="w-full rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 py-12 text-center">
-                    <ImageIcon size={32} className="mx-auto mb-3 text-slate-300" />
-                    <div className="mb-1 text-[14px] font-bold text-slate-500">OCR 导入暂未接入</div>
-                    <div className="mx-auto max-w-[80%] text-[11px] text-slate-400">请先使用手动录入，避免上传后没有真实识别结果。</div>
-                  </div>
-                </div>
-              )}
+              ) : <TradeImportDrawer isOpen embedded defaultTradeDate={defaultTradeDate} onClose={onClose} onImported={items => { onImported?.(items); onClose(); }} />}
             </div>
 
             {activeTab === 'manual' && (

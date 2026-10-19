@@ -125,6 +125,7 @@ export default function Agent() {
   const tab = searchParams.get('tab') || 'chat';
   const reference = searchParams.get('ref');
   const isAssetReference = Boolean(reference?.startsWith('detail-'));
+  const isDailyReference = Boolean(reference && /^daily-\d{4}-\d{2}-\d{2}$/.test(reference));
   const draftAsset = searchParams.get('asset') || 'ZIJIN MINING';
   
   const [input, setInput] = useState('');
@@ -781,9 +782,9 @@ export default function Agent() {
           msgs.push({ id: 'i1_a', role: 'agent', content: insightsResult });
           setMessages(msgs);
         }
-      } else if (reference === 'daily-2026-07-14' || isAssetReference) {
+      } else if (isDailyReference || isAssetReference) {
         setMessages([]);
-        setInput(searchParams.get('prompt') || (isAssetReference ? 'How did I execute these trades?' : "Review today's trades"));
+        setInput(searchParams.get('prompt') || (isAssetReference ? 'How did I execute these trades?' : 'Review this day with my saved trades and notes.'));
       } else {
         setMessages([]); // default state / landing for chat
       }
@@ -1254,9 +1255,9 @@ export default function Agent() {
               <Sparkles size={16} />
             </div>
             <div className="flex-1 min-w-0 flex items-center gap-1.5">
-              {tab === 'chat' && (reference === 'daily-2026-07-14' || isAssetReference) && (
+              {tab === 'chat' && (isDailyReference || isAssetReference) && (
                 <div className="inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded-md bg-[#EE6C4D]/10 border border-[#EE6C4D]/20 text-[9px] font-bold text-[#0B2545]">
-                  <BookOpen size={10} className="text-[#EE6C4D]" /> {isAssetReference ? `${searchParams.get('symbol') || 'Asset'} · P&L ${searchParams.get('pnl') || '--'}` : 'Jul 14 Reference'}
+                  <BookOpen size={10} className="text-[#EE6C4D]" /> {isAssetReference ? `${searchParams.get('symbol') || 'Asset'} · P&L ${searchParams.get('pnl') || '--'}` : `Today · ${reference?.slice(6)}`}
                 </div>
               )}
               <textarea
