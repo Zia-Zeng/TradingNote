@@ -131,7 +131,7 @@ export default function HoldingsSnapshotModule() {
             </div>
           </div>
         </div>
-        {[...importWarnings, ...overview.warnings].slice(0, 3).map((warning, index) => <p key={`${index}-${warning}`} className="mt-1 rounded bg-amber-50 p-1.5 text-[9px] leading-relaxed text-amber-700">{warning}</p>)}
+        {importWarnings.slice(0, 3).map((warning, index) => <p key={`${index}-${warning}`} className="mt-1 rounded bg-amber-50 p-1.5 text-[9px] leading-relaxed text-amber-700">{warning}</p>)}
       </>}
     </section>
     <HoldingsImportDrawer open={importOpen} onClose={() => setImportOpen(false)} defaultDate={asOf} onImported={result => {

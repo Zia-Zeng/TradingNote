@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -26,6 +27,9 @@ from .tavily_mcp import search_market_news
 
 
 router = APIRouter(prefix="/api/today", tags=["today"])
+
+PORTFOLIO_ENGINE_VERSION = 2
+PORTFOLIO_ACTIVE_CACHE_SECONDS = 300
 
 
 class AssetSnapshot(BaseModel):
@@ -248,6 +252,8 @@ def _ensure_today_storage() -> None:
                 input_fingerprint TEXT NOT NULL,
                 computed_at TEXT NOT NULL,
                 engine_version INTEGER NOT NULL DEFAULT 1,
+                source_fingerprint TEXT,
+                computed_through TEXT,
                 PRIMARY KEY (account, state_date)
             );
 
@@ -271,6 +277,11 @@ def _ensure_today_storage() -> None:
             );
             """
         )
+        state_columns = {row["name"] for row in connection.execute("PRAGMA table_info(today_portfolio_daily_states)").fetchall()}
+        if "source_fingerprint" not in state_columns:
+            connection.execute("ALTER TABLE today_portfolio_daily_states ADD COLUMN source_fingerprint TEXT")
+        if "computed_through" not in state_columns:
+            connection.execute("ALTER TABLE today_portfolio_daily_states ADD COLUMN computed_through TEXT")
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(today_holding_snapshots)").fetchall()}
         if "total_assets" not in columns:
             connection.execute("ALTER TABLE today_holding_snapshots ADD COLUMN total_assets REAL")
@@ -1033,6 +1044,62 @@ def _calculate_portfolio_pnl(
     }
 
 
+def _portfolio_source_fingerprint(baseline: dict[str, Any], trades: list[dict[str, Any]]) -> str:
+    source = {"baseline": baseline, "trades": trades, "engine_version": PORTFOLIO_ENGINE_VERSION}
+    return hashlib.sha256(json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _cached_portfolio_response(
+    rows: list[Any], source_fingerprint: str, start_date: date, end_date: date,
+) -> dict[str, Any] | None:
+    if not rows or any(row["source_fingerprint"] != source_fingerprint for row in rows):
+        return None
+    if any(row["engine_version"] != PORTFOLIO_ENGINE_VERSION or (row["computed_through"] or "") < end_date.isoformat() for row in rows):
+        return None
+    try:
+        stored_at = max(datetime.fromisoformat(row["computed_at"]) for row in rows)
+    except (TypeError, ValueError):
+        return None
+    shanghai_today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+    if end_date >= shanghai_today:
+        age_seconds = (datetime.now(timezone.utc) - stored_at.astimezone(timezone.utc)).total_seconds()
+        if age_seconds < 0 or age_seconds > PORTFOLIO_ACTIVE_CACHE_SECONDS:
+            return None
+    try:
+        all_days = [json.loads(row["payload"]) for row in rows]
+        if any(not isinstance(day, dict) or "daily_state" not in day or "pnl_by_currency" not in day for day in all_days):
+            return None
+    except (TypeError, json.JSONDecodeError):
+        return None
+    cached_days = [day for day in all_days if start_date.isoformat() <= day["date"] <= end_date.isoformat()]
+    days = [{key: value for key, value in day.items() if key not in {"baseline_date", "calculation_warnings"}} for day in cached_days]
+    complete_days = [day for day in days if day.get("complete")]
+    pnl_by_currency: dict[str, float] = {}
+    daily_totals: list[float] = []
+    for day in complete_days:
+        for currency, value in day.get("pnl_by_currency", {}).items():
+            pnl_by_currency[currency] = pnl_by_currency.get(currency, 0.0) + value
+        if len(day.get("pnl_by_currency", {})) <= 1:
+            daily_totals.append(sum(day.get("pnl_by_currency", {}).values()))
+    warnings = next((day.get("calculation_warnings") for day in all_days if day.get("calculation_warnings") is not None), [])
+    return {
+        "baseline_date": all_days[0].get("baseline_date") if all_days else None,
+        "days": days,
+        "month_summary": {
+            "pnl_by_currency": {currency: round(value, 4) for currency, value in sorted(pnl_by_currency.items())},
+            "win_days": sum(1 for value in daily_totals if value > 0) if len(pnl_by_currency) <= 1 else None,
+            "loss_days": sum(1 for value in daily_totals if value < 0) if len(pnl_by_currency) <= 1 else None,
+            "best_day": max(daily_totals) if daily_totals else None,
+            "complete_days": len(complete_days),
+        },
+        "warnings": warnings,
+        "incomplete_dates": [day["date"] for day in days if not day.get("complete")],
+        "source": "Yahoo Finance first, then BaoStock/AkShare/Wind for A-shares; Yahoo Finance for other tickers",
+        "currency_policy": "Original currencies are retained; no FX conversion is applied.",
+        "cache_hit": True,
+    }
+
+
 @router.get("/portfolio/pnl")
 async def get_portfolio_pnl(
     start_date: date = Query(),
@@ -1083,6 +1150,15 @@ async def get_portfolio_pnl(
     # are not silently mixed into the roll-forward.
     relevant_snapshots = [baseline]
     trades = [trade for trade in list_trades() if baseline["as_of"] < (_trade_date(trade.get("time") or trade.get("trade_date") or "") or "") <= end_date.isoformat()]
+    source_fingerprint = _portfolio_source_fingerprint(baseline, trades)
+    with database() as connection:
+        cached_rows = connection.execute(
+            "SELECT state_date, payload, input_fingerprint, computed_at, engine_version, source_fingerprint, computed_through FROM today_portfolio_daily_states WHERE account = ? ORDER BY state_date",
+            (baseline["account"],),
+        ).fetchall()
+    cached_response = _cached_portfolio_response(cached_rows, source_fingerprint, start_date, end_date)
+    if cached_response is not None:
+        return cached_response
     descriptors: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in baseline["rows"]:
         key = _portfolio_instrument_key(row)
@@ -1125,14 +1201,8 @@ async def get_portfolio_pnl(
     result["incomplete_dates"] = [day["date"] for day in result["days"] if not day.get("complete")]
     # The derived table is a materialized view, keyed by account and date.
     # Replacing it transactionally makes historical corrections deterministic.
-    state_fingerprint = hashlib.sha256(json.dumps({"baseline": baseline, "trades": trades, "prices": {"|".join(key): bars for key, bars in prices.items()}}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    state_fingerprint = hashlib.sha256(json.dumps({"source": source_fingerprint, "prices": {"|".join(key): bars for key, bars in prices.items()}}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     computed_at = datetime.now(timezone.utc).isoformat()
-    with database() as connection:
-        connection.execute("DELETE FROM today_portfolio_daily_states WHERE account = ? AND state_date BETWEEN ? AND ?", (baseline["account"], baseline["as_of"], end_date.isoformat()))
-        connection.executemany(
-            "INSERT INTO today_portfolio_daily_states (account, state_date, payload, input_fingerprint, computed_at, engine_version) VALUES (?, ?, ?, ?, ?, 1)",
-            [(baseline["account"], day["date"], json.dumps(day["daily_state"], ensure_ascii=False), state_fingerprint, computed_at) for day in all_days],
-        )
     if unavailable:
         details = ", ".join(
             f"{code} ({error})" if error else str(code)
@@ -1141,6 +1211,13 @@ async def get_portfolio_pnl(
         result["warnings"].insert(0, "Closing-price history unavailable for: " + details + (" and others." if len(unavailable) > 8 else "."))
     result["source"] = "Yahoo Finance first, then BaoStock/AkShare/Wind for A-shares; Yahoo Finance for other tickers"
     result["currency_policy"] = "Original currencies are retained; no FX conversion is applied."
+    result["cache_hit"] = False
+    with database() as connection:
+        connection.execute("DELETE FROM today_portfolio_daily_states WHERE account = ?", (baseline["account"],))
+        connection.executemany(
+            "INSERT INTO today_portfolio_daily_states (account, state_date, payload, input_fingerprint, computed_at, engine_version, source_fingerprint, computed_through) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [(baseline["account"], day["date"], json.dumps({**day, "baseline_date": baseline["as_of"], "calculation_warnings": result["warnings"]}, ensure_ascii=False), state_fingerprint, computed_at, PORTFOLIO_ENGINE_VERSION, source_fingerprint, end_date.isoformat()) for day in all_days],
+        )
     return result
 
 
@@ -1158,7 +1235,9 @@ def get_portfolio_daily_state(
         ).fetchone()
     if row is None:
         return {"available": False, "account": account, "date": as_of.isoformat(), "message": "No materialized state for this date. Request portfolio P&L to calculate it."}
-    return {"available": True, "account": account, **json.loads(row["payload"]), "input_fingerprint": row["input_fingerprint"], "computed_at": row["computed_at"], "engine_version": row["engine_version"]}
+    payload = json.loads(row["payload"])
+    state = payload.get("daily_state", payload)
+    return {"available": True, "account": account, **state, "input_fingerprint": row["input_fingerprint"], "computed_at": row["computed_at"], "engine_version": row["engine_version"]}
 
 
 @router.get("/notes", response_model=list[DailyNote])
