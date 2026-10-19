@@ -85,7 +85,7 @@ class EastmoneySearchTests(unittest.TestCase):
         response.read.return_value = json.dumps({"chart": {"result": [{
             "meta": {"exchangeTimezoneName": "America/New_York"},
             "timestamp": [timestamp],
-            "indicators": {"quote": [{"close": [100.25]}]},
+            "indicators": {"quote": [{"open": [99.5], "high": [101.0], "low": [98.75], "close": [100.25]}]},
         }], "error": None}}).encode()
         response.__enter__ = Mock(return_value=response)
         response.__exit__ = Mock(return_value=False)
@@ -93,7 +93,7 @@ class EastmoneySearchTests(unittest.TestCase):
 
         result = market_data._yahoo_history("AAPL", "2026-10-19", "2026-10-19")
 
-        self.assertEqual(result["bars"], [{"date": "2026-10-19", "close": 100.25}])
+        self.assertEqual(result["bars"], [{"date": "2026-10-19", "close": 100.25, "open": 99.5, "high": 101.0, "low": 98.75}])
 
     @patch("app.market_data._yahoo_history")
     def test_mainland_history_uses_yahoo_when_regional_sources_are_unavailable(self, yahoo_history):

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Search, Tag, Target, Image as ImageIcon, CheckCircle2, Plus, Trash2 } from 'lucide-react';
+import { X, Search, Tag, Target, Image as ImageIcon, Plus, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { apiRequest } from '../lib/api';
 import { currentLocalDate, hasTradeDate, tradeDateTimeFields } from '../lib/trade-time';
@@ -13,12 +13,13 @@ interface RecordDrawerProps {
   onClose: () => void;
   initialData?: any;
   onSave?: (data: any) => void | Promise<void>;
+  onSaved?: (tradeDate: string) => void;
   onImported?: (items: any[]) => void;
   defaultTab?: 'manual' | 'ocr';
   defaultTradeDate?: string;
 }
 
-export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onImported, defaultTab = 'manual', defaultTradeDate }: RecordDrawerProps) {
+export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onSaved, onImported, defaultTab = 'manual', defaultTradeDate }: RecordDrawerProps) {
   const buyMotiveOptions = ['Breakout Confirmation', 'Pullback Entry', 'Support Bounce', 'Trend Continuation', 'Catalyst', 'Re-entry'];
   const sellMotiveOptions = ['Take Profit', 'Stop Loss', 'Resistance Rejection', 'Trend Reversal', 'Risk Reduction', 'Thesis Invalidated'];
   const [isAddingTag, setIsAddingTag] = useState(false);
@@ -28,7 +29,6 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onI
     catch { return { Buy: [], Sell: [] }; }
   });
   const [activeTab, setActiveTab] = useState<'manual' | 'ocr'>(defaultTab);
-  const [showSuccess, setShowSuccess] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [stockOptions, setStockOptions] = useState<InstrumentSearchResult[]>([]);
@@ -157,9 +157,9 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onI
       return;
     }
     const inferred = inferMarketCurrency(code || symbol);
-    const originalCurrency = (currency || inferred.currency).trim().toUpperCase();
-    if (!originalCurrency) {
-      setSaveError('Enter the original trading currency (for example, USD or HKD).');
+    const originalCurrency = (currency || defaultCurrencyForMarket(market) || inferred.currency).trim().toUpperCase();
+    if (!/^[A-Z]{3,8}$/.test(originalCurrency)) {
+      setSaveError('Enter a 3–8 letter trading currency (for example, CNY, USD or HKD).');
       return;
     }
     const data = {
@@ -168,13 +168,8 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onI
     setIsSaving(true);
     try {
       if (onSave) await onSave(data);
-      if (initialData) {
-        onClose();
-      } else {
-        setShowSuccess(true);
-        setTimeout(() => setShowSuccess(false), 2000);
-        setSymbol(''); setCode(''); setMarket('CN'); setCurrency('CNY'); setAssetClass('Stock'); setTradeDate(currentLocalDate()); setTradeClock(''); setPrice(''); setQty(''); setTp(''); setSl(''); setPlanDesc(''); setMotiveDesc('');
-      }
+      if (onSaved) onSaved(tradeDate);
+      else onClose();
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : 'Unable to save the trade. Please try again.');
     } finally {
@@ -239,6 +234,7 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onI
                       <input 
                           value={symbol}
                           onFocus={() => setStockSearchOpen(true)}
+                          onBlur={() => setStockSearchOpen(false)}
                           onChange={(e) => { const value = e.target.value; setSymbol(value); setCode(/^[A-Za-z0-9.^=_:-]+$/.test(value.trim()) ? value.trim() : ''); const inferred = inferMarketCurrency(value); setMarket(inferred.market); setCurrency(inferred.currency); setAssetClass(inferred.market === 'CRYPTO' ? 'Crypto' : 'Stock'); setStockSearchOpen(true); }}
                           onKeyDown={(e) => { if (e.key === 'Escape') setStockSearchOpen(false); }}
                           placeholder="Search global stocks, ETFs, funds, crypto…"
@@ -258,6 +254,22 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onI
                           {!isSearchingStocks && !stockSearchUnavailable && stockOptions.length === 0 && <div className="px-3 py-2 text-[10px] text-slate-500">No matches. You can use the text you entered.</div>}
                         </div>
                       )}
+                    </div>
+                    <div className="mb-3 grid grid-cols-2 gap-2">
+                      <label className="block">
+                        <span className="mb-1 block text-[9px] font-bold uppercase tracking-wider text-slate-400">Market</span>
+                        <select value={market} onChange={event => { const nextMarket = event.target.value; setMarket(nextMarket); setCurrency(defaultCurrencyForMarket(nextMarket)); }} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-[11px] text-[#0B2545] focus:border-[#EE6C4D] focus:outline-none">
+                          <option value="CN">China</option>
+                          <option value="HK">Hong Kong</option>
+                          <option value="US">United States</option>
+                          <option value="GLOBAL">Other market</option>
+                          <option value="CRYPTO">Crypto</option>
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="mb-1 block text-[9px] font-bold uppercase tracking-wider text-slate-400">Currency</span>
+                        <input value={currency} onChange={event => setCurrency(event.target.value.toUpperCase())} maxLength={8} placeholder="CNY / USD / HKD" className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-[11px] text-[#0B2545] focus:border-[#EE6C4D] focus:outline-none" />
+                      </label>
                     </div>
                     <div className="mb-3 grid grid-cols-2 gap-2">
                       <label className="block">
@@ -359,16 +371,6 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onI
 
             {activeTab === 'manual' && (
               <div className="px-3 pt-3 pb-6 border-t border-slate-200 bg-white z-10 shadow-[0_-4px_20px_rgba(0,0,0,0.03)] relative shrink-0">
-                <AnimatePresence>
-                  {showSuccess && (
-                    <motion.div 
-                      initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-                      className="absolute -top-10 left-1/2 -translate-x-1/2 bg-[#0B2545] text-white px-3 py-1.5 rounded-full text-[11px] font-bold flex items-center gap-1.5 shadow-lg whitespace-nowrap"
-                    >
-                      <CheckCircle2 size={12} className="text-[#EE6C4D]" /> Record Saved! Keep going.
-                    </motion.div>
-                  )}
-                </AnimatePresence>
                 {saveError && <p role="alert" className="mb-2 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-2 text-[10px] text-rose-700">{saveError}</p>}
                 <button 
                   onClick={handleSave} 

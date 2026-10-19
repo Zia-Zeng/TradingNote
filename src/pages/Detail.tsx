@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useNavigate, useSearchParams, useMatch } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, useMatch, useLocation } from 'react-router-dom';
 import { 
   ChevronLeft, ChevronRight, MoreHorizontal,
   BotMessageSquare, Zap, Sparkles, MessageCircle, Tag, Edit2, Edit3, Plus, Trash2, Loader2, AlertTriangle
@@ -125,7 +125,7 @@ const assetGroupKey = (trade: TradeRecord) => trade.code?.trim()
 
 const formatPrice = (value: number | null | undefined) => value === null || value === undefined || !Number.isFinite(value)
   ? '--'
-  : value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 3 });
+  : value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const formatMoney = (value: number | null) => value === null || !Number.isFinite(value)
   ? '--'
@@ -202,6 +202,8 @@ export default function Detail() {
   const [searchParams] = useSearchParams();
   const scrollTo = searchParams.get('scroll');
   const navigate = useNavigate();
+  const location = useLocation();
+  const backTo = typeof location.state?.from === 'string' && location.state.from.startsWith('/report') ? location.state.from : '/';
   const routeKey = decodeURIComponent(id || '');
   const requestedAsset = legacyAssetRoutes[routeKey] || routeKey;
   const isHistoryPage = Boolean(useMatch('/detail/:id/history'));
@@ -606,7 +608,7 @@ export default function Detail() {
     <div id="detail-root" className="w-full min-h-full pb-[40px] bg-[#F4F5F7] font-sans text-slate-900">
       {/* Header */}
       <div className="flex items-center justify-between px-3 pt-[54px] pb-2 bg-white sticky top-0 z-30 shadow-sm border-b border-slate-100">
-        <button onClick={() => navigate(isHistoryPage ? `/detail/${encodeURIComponent(routeKey)}?scroll=notes-section` : '/')} aria-label="Back" className="p-2 -ml-2 text-slate-700 active:bg-slate-100 rounded-full transition-colors">
+        <button onClick={() => navigate(isHistoryPage ? `/detail/${encodeURIComponent(routeKey)}?scroll=notes-section` : backTo)} aria-label="Back" className="p-2 -ml-2 text-slate-700 active:bg-slate-100 rounded-full transition-colors">
           <ChevronLeft size={20} />
         </button>
         <div className="flex flex-col items-center">
@@ -683,7 +685,7 @@ export default function Detail() {
               </defs>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
               <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{fontSize: 9, fill: '#94a3b8', fontWeight: 500}} dy={10} minTickGap={15} />
-              <YAxis mirror={true} domain={['dataMin - (dataMax-dataMin)*0.1', 'dataMax + (dataMax-dataMin)*0.1']} axisLine={false} tickLine={false} tick={{fontSize: 9, fill: '#94a3b8', fontWeight: 500, fontFamily: 'monospace'}} dx={-5} orientation="right" />
+              <YAxis mirror={true} domain={['dataMin - (dataMax-dataMin)*0.1', 'dataMax + (dataMax-dataMin)*0.1']} tickFormatter={formatPrice} axisLine={false} tickLine={false} tick={{fontSize: 9, fill: '#94a3b8', fontWeight: 500, fontFamily: 'monospace'}} dx={-5} orientation="right" />
               {data.plan.target !== null && <ReferenceLine y={data.plan.target} stroke="#EE6C4D" strokeDasharray="4 4" label={{ position: 'insideTopLeft', value: `TP ${data.plan.target.toFixed(2)}`, fill: '#EE6C4D', fontSize: 9, fontWeight: 'bold' }} />}
               {data.plan.stopLoss !== null && <ReferenceLine y={data.plan.stopLoss} stroke="#EE6C4D" strokeDasharray="4 4" label={{ position: 'insideBottomLeft', value: `SL ${data.plan.stopLoss.toFixed(2)}`, fill: '#EE6C4D', fontSize: 9, fontWeight: 'bold' }} />}
               <Area type="monotone" dataKey="price" stroke={data.chartColor} strokeWidth={2} fillOpacity={1} fill="url(#colorPrice)" />

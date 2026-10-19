@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI, OpenAIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
-from .market_data import fetch_a_share_history
+from .market_data import fetch_a_share_history, fetch_daily_history
 from .feed import COVER_DIR, FEED_PROMPT_PATH, FeedPrompt, generate_daily_feed, get_feed_prompt
 from .news_data import fetch_market_news
 from .today import get_agent_daily_context, router as today_router
@@ -475,6 +475,21 @@ async def market_history(
         raise HTTPException(status_code=503, detail="Market data dependency is missing. Install backend requirements.") from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail="A-share historical data provider is unavailable. Please retry later.") from exc
+
+
+@app.get("/api/market/daily")
+async def daily_market_history(
+    code: str = Query(min_length=1, max_length=32),
+    market: str = Query(min_length=2, max_length=16),
+    start_date: date = Query(default_factory=lambda: date.today() - timedelta(days=30)),
+    end_date: date = Query(default_factory=date.today),
+) -> dict[str, Any]:
+    try:
+        return await fetch_daily_history(code, market, start_date, end_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Daily market data is unavailable. Please retry later.") from exc
 
 
 def _tracking_facts(

@@ -460,7 +460,8 @@ def _yahoo_history(code: str, start_date: str, end_date: str) -> dict[str, Any]:
     if not isinstance(result, dict):
         raise RuntimeError("Market data provider returned no history for this ticker.")
     quote_groups = result.get("indicators", {}).get("quote", [])
-    closes = quote_groups[0].get("close", []) if quote_groups else []
+    quotes = quote_groups[0] if quote_groups else {}
+    closes = quotes.get("close", [])
     timestamps = result.get("timestamp", [])
     timezone_name = result.get("meta", {}).get("exchangeTimezoneName", "UTC")
     try:
@@ -468,14 +469,21 @@ def _yahoo_history(code: str, start_date: str, end_date: str) -> dict[str, Any]:
     except (KeyError, ValueError):
         market_timezone = timezone.utc
     bars = []
-    for timestamp, close in zip(timestamps, closes):
+    for index, (timestamp, close) in enumerate(zip(timestamps, closes)):
         value = _number(close)
         if value is None:
             continue
-        bars.append({
+        bar = {
             "date": datetime.fromtimestamp(int(timestamp), market_timezone).date().isoformat(),
             "close": value,
-        })
+        }
+        for field in ("open", "high", "low"):
+            values = quotes.get(field) or []
+            if index < len(values):
+                field_value = _number(values[index])
+                if field_value is not None:
+                    bar[field] = field_value
+        bars.append(bar)
     return {"code": symbol, "source": "Yahoo Finance", "bars": _normalize_rows(bars, start_date, end_date)}
 
 

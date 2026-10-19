@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { MessageCircle, Edit3, Plus, Target, Tag, Edit2, Trash2, Loader2, AlertTriangle } from 'lucide-react';
+import { MessageCircle, Edit3, Plus, Target, Tag, Edit2, Trash2, Loader2, AlertTriangle, ChevronRight } from 'lucide-react';
 import { cn } from '../lib/utils';
 import RecordDrawer from './RecordDrawer';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { readLocalResult, SAVED_RESULTS_EVENT } from '../lib/saved-results';
 import { apiRequest } from '../lib/api';
 import { formatTradeTimestamp, toStoredTradeTime } from '../lib/trade-time';
@@ -41,8 +41,11 @@ const normalizeTrade = (trade: TradeRecord): TradeRecord => ({
 });
 
 const formatAmount = (amount: number | string | undefined, currency?: string) => formatCurrencyAmount(amount, currency || 'CNY');
+const tradeDateOf = (trade: TradeRecord) => formatTradeTimestamp(trade.time).date || trade.date || '';
+const tradeSortKey = (trade: TradeRecord) => `${tradeDateOf(trade)} ${formatTradeTimestamp(trade.time).time || '00:00'}`;
+const sortTrades = (records: TradeRecord[]) => [...records].sort((first, second) => tradeSortKey(second).localeCompare(tradeSortKey(first)));
 
-export default function TradesModule({ isCard = false, tradeDate }: { isCard?: boolean; tradeDate?: string }) {
+export default function TradesModule({ isCard = false, tradeDate, view = 'day' }: { isCard?: boolean; tradeDate?: string; view?: 'day' | 'recent' | 'history' }) {
   const [trades, setTrades] = useState<TradeRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -50,13 +53,22 @@ export default function TradesModule({ isCard = false, tradeDate }: { isCard?: b
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editingTrade, setEditingTrade] = useState<any>(null);
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const lastSavedTrade = useRef<TradeRecord | null>(null);
   const [savedReviews, setSavedReviews] = useState<Record<string, SavedReview | null>>({});
   const [tradeToDelete, setTradeToDelete] = useState<TradeRecord | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const visibleTrades = tradeDate
-    ? trades.filter(trade => formatTradeTimestamp(trade.time).date === tradeDate)
-    : trades;
+  const sortedTrades = sortTrades(trades);
+  const historyFrom = searchParams.get('from') || '';
+  const historyTo = searchParams.get('to') || '';
+  const visibleTrades = view === 'recent'
+    ? sortedTrades.slice(0, 3)
+    : view === 'history'
+      ? sortedTrades.filter(trade => (!historyFrom || tradeDateOf(trade) >= historyFrom) && (!historyTo || tradeDateOf(trade) <= historyTo))
+      : tradeDate
+        ? sortedTrades.filter(trade => tradeDateOf(trade) === tradeDate)
+        : sortedTrades;
 
   const loadTrades = async () => {
     setIsLoading(true);
@@ -129,6 +141,35 @@ export default function TradesModule({ isCard = false, tradeDate }: { isCard?: b
     setSearchParams(next);
   };
 
+  const setHistoryRange = (key: 'from' | 'to', value: string) => {
+    setSearchParams(current => {
+      const next = new URLSearchParams(current);
+      if (value) next.set(key, value);
+      else next.delete(key);
+      return next;
+    });
+  };
+
+  const showSavedTrade = (savedDate: string) => {
+    setDrawerOpen(false);
+    setEditingTrade(null);
+    const saved = lastSavedTrade.current;
+    if (view === 'recent' && saved && !sortTrades([...trades.filter(trade => trade.id !== saved.id), saved]).slice(0, 3).some(trade => trade.id === saved.id)) {
+      navigate(`/trades?from=${savedDate}&to=${savedDate}`);
+      return;
+    }
+    setSearchParams(current => {
+      const next = new URLSearchParams(current);
+      next.delete('trade_action');
+      next.delete('trade_id');
+      if (view === 'history') {
+        next.set('from', savedDate);
+        next.set('to', savedDate);
+      } else if (tradeDate && savedDate !== tradeDate) next.set('date', savedDate);
+      return next;
+    });
+  };
+
   const handleSave = async (data: any) => {
     setMutationError(null);
     const amount = Number(data.price) * Number(data.qty);
@@ -157,6 +198,7 @@ export default function TradesModule({ isCard = false, tradeDate }: { isCard?: b
         ? await apiRequest<TradeRecord>(`/api/trades/${encodeURIComponent(editingTrade.id)}`, { method: 'PUT', body: JSON.stringify(payload) })
         : await apiRequest<TradeRecord>('/api/trades', { method: 'POST', body: JSON.stringify(payload) });
       const normalized = normalizeTrade(saved);
+      lastSavedTrade.current = normalized;
       setTrades(current => editingTrade
         ? current.map(trade => trade.id === editingTrade.id ? normalized : trade)
         : [normalized, ...current]);
@@ -165,7 +207,6 @@ export default function TradesModule({ isCard = false, tradeDate }: { isCard?: b
         const previousDate = formatTradeTimestamp(editingTrade.time).date;
         if (previousDate && previousDate !== data.tradeDate) notifyDailyReviewInputsChanged(previousDate);
       }
-      if (!editingTrade) closeDrawer();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to save the trade record.';
       setMutationError(message);
@@ -227,6 +268,20 @@ export default function TradesModule({ isCard = false, tradeDate }: { isCard?: b
         </div>
       </div>
 
+      {view === 'history' && (
+        <div className="mb-4 grid grid-cols-2 gap-2 rounded-xl bg-slate-50 p-3">
+          <label className="text-[10px] font-semibold text-slate-500">
+            From
+            <input aria-label="From date" type="date" value={historyFrom} onChange={event => setHistoryRange('from', event.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 font-mono text-[11px] text-[#0B2545]" />
+          </label>
+          <label className="text-[10px] font-semibold text-slate-500">
+            To
+            <input aria-label="To date" type="date" value={historyTo} onChange={event => setHistoryRange('to', event.target.value)} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 font-mono text-[11px] text-[#0B2545]" />
+          </label>
+          {(historyFrom || historyTo) && <button onClick={() => setSearchParams(current => { const next = new URLSearchParams(current); next.delete('from'); next.delete('to'); return next; })} className="col-span-2 text-right text-[10px] font-semibold text-[#EE6C4D]">Clear date filter</button>}
+        </div>
+      )}
+
       {loadError && (
         <div role="alert" className="mb-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-[11px] text-rose-700">
           <div className="flex items-start gap-2"><AlertTriangle size={14} className="mt-0.5 shrink-0" /><span className="flex-1">{loadError}</span></div>
@@ -238,9 +293,9 @@ export default function TradesModule({ isCard = false, tradeDate }: { isCard?: b
         <div className="flex items-center justify-center gap-2 py-10 text-[12px] text-slate-400"><Loader2 size={15} className="animate-spin" />Loading trades…</div>
       ) : loadError ? null : visibleTrades.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center">
-          <p className="text-[13px] font-bold text-[#0B2545]">{tradeDate ? 'No trades recorded for this date' : 'No trades yet'}</p>
-          <p className="mt-1 text-[11px] text-slate-500">{tradeDate ? 'Use Record above to add a trade for this day.' : 'Add your first trade to save it to your ledger.'}</p>
-          {!tradeDate && <button onClick={handleAdd} className="mt-3 rounded-lg bg-[#EE6C4D] px-3 py-2 text-[11px] font-bold text-white"><Plus size={12} className="mr-1 inline" />Add trade</button>}
+          <p className="text-[13px] font-bold text-[#0B2545]">{view === 'history' && trades.length ? 'No trades in this date range' : view === 'day' && tradeDate ? 'No trades recorded for this date' : 'No trades yet'}</p>
+          <p className="mt-1 text-[11px] text-slate-500">{view === 'history' && trades.length ? 'Adjust the dates above to see more history.' : view === 'day' && tradeDate ? 'Use Record above to add a trade for this day.' : 'Add your first trade to save it to your ledger.'}</p>
+          {view !== 'day' && !trades.length && <button onClick={handleAdd} className="mt-3 rounded-lg bg-[#EE6C4D] px-3 py-2 text-[11px] font-bold text-white"><Plus size={12} className="mr-1 inline" />Add trade</button>}
         </div>
       ) : <div className="relative pl-16 space-y-6 before:absolute before:left-[55px] before:top-2 before:bottom-0 before:w-px before:bg-slate-200">
         {visibleTrades.map(trade => (
@@ -262,8 +317,8 @@ export default function TradesModule({ isCard = false, tradeDate }: { isCard?: b
                   <button onClick={() => void handleDelete(trade)} aria-label="Delete trade record" className="text-slate-400 hover:text-rose-600 active:scale-95 p-1 transition-all"><Trash2 size={12} /></button>
                 </div>
               </div>
-              {formatTradeTimestamp(trade.time).date
-                ? <div className="-mt-2 mb-2.5 text-[9px] font-mono text-slate-400">{formatTradeTimestamp(trade.time).time ? 'Trade time' : 'Trade date'} {formatTradeTimestamp(trade.time).date}{formatTradeTimestamp(trade.time).time ? ` ${formatTradeTimestamp(trade.time).time}` : ''}</div>
+              {tradeDateOf(trade)
+                ? <div className="-mt-2 mb-2.5 text-[9px] font-mono text-slate-400">{formatTradeTimestamp(trade.time).time ? 'Trade time' : 'Trade date'} {tradeDateOf(trade)}{formatTradeTimestamp(trade.time).time ? ` ${formatTradeTimestamp(trade.time).time}` : ''}</div>
                 : <div className="-mt-2 mb-2.5 text-[9px] text-amber-600">Trade date not recorded</div>}
               
               <div className="grid grid-cols-3 gap-2 mb-3 border-b border-slate-100 pb-3">
@@ -345,11 +400,18 @@ export default function TradesModule({ isCard = false, tradeDate }: { isCard?: b
         ))}
       </div>}
 
+      {view === 'recent' && trades.length > 3 && (
+        <button onClick={() => navigate('/trades')} className="mt-4 flex w-full items-center justify-center gap-1 border-t border-slate-100 pt-3 text-[11px] font-bold text-[#EE6C4D]">
+          View All Trades <ChevronRight size={13} />
+        </button>
+      )}
+
       <RecordDrawer 
         isOpen={drawerOpen} 
         onClose={closeDrawer} 
         initialData={editingTrade} 
         onSave={handleSave} 
+        onSaved={showSavedTrade}
         onImported={handleImported}
         defaultTab={searchParams.get('trade_action') === 'add_ocr' ? 'ocr' : 'manual'}
         defaultTradeDate={tradeDate}

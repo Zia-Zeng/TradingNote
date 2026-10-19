@@ -431,7 +431,7 @@ export default function Home() {
         </div>
 
         {/* Trades Module (Migrated from Daily Review) */}
-        <TradesModule isCard={true} tradeDate={selectedDate} />
+        <TradesModule isCard={true} tradeDate={selectedDate} view="recent" />
 
         {/* My Notes Module */}
         <div id="notes-module" className="pt-1.5 pb-1 relative z-10">
