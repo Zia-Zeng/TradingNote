@@ -4,6 +4,7 @@ import { apiRequest } from '../lib/api';
 import { type ImportedTradeDraft, parseTradeSpreadsheet } from '../lib/trade-import';
 import { currentLocalDate, hasTradeDate, toStoredTradeTime, tradeDateTimeFields } from '../lib/trade-time';
 import { defaultCurrencyForMarket, inferMarketCurrency, normalizeMarketCode } from '../lib/instruments';
+import { newIdempotencyKey, sha256File } from '../lib/import-dedupe';
 
 type ImportResult = ImportedTradeDraft & { id: string };
 type DuplicateMatch = { row_index: number; symbol: string; trade_date: string | null; existing_id?: string; duplicate_of_row?: number; source: 'ledger' | 'upload' };
@@ -18,16 +19,21 @@ export default function TradeImportDrawer({ isOpen, onClose, onImported, embedde
   const [saving, setSaving] = useState(false);
   const [duplicateMatches, setDuplicateMatches] = useState<DuplicateMatch[] | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [sourceHashes, setSourceHashes] = useState<string[]>([]);
+  const [idempotencyKey, setIdempotencyKey] = useState(() => newIdempotencyKey('trades'));
 
   if (!isOpen) return null;
 
-  const reset = () => { setRows([]); setWarnings([]); setError(null); setNotice(null); setDuplicateMatches(null); setLoading(false); setSaving(false); };
+  const reset = () => { setRows([]); setWarnings([]); setError(null); setNotice(null); setDuplicateMatches(null); setSourceHashes([]); setIdempotencyKey(newIdempotencyKey('trades')); setLoading(false); setSaving(false); };
   const close = () => { reset(); onClose(); };
 
   const selectFile = async (file?: File) => {
     if (!file) return;
     setLoading(true); setError(null); setNotice(null); setDuplicateMatches(null); setRows([]); setWarnings([]);
     try {
+      const sourceHash = await sha256File(file);
+      setSourceHashes([sourceHash]);
+      setIdempotencyKey(newIdempotencyKey('trades'));
       if (file.type.startsWith('image/')) {
         const body = new FormData(); body.append('image', file);
         const preview = await apiRequest<{ trades: ImportedTradeDraft[]; warnings: string[] }>('/api/today/import/ocr', { method: 'POST', body });
@@ -54,7 +60,7 @@ export default function TradeImportDrawer({ isOpen, onClose, onImported, embedde
 
   const importWithDuplicateMode = async (duplicate_mode: DuplicateMode) => {
     const result = await apiRequest<{ trades: ImportResult[]; skipped_count: number; replaced_count: number }>('/api/today/import/trades', {
-      method: 'POST', body: JSON.stringify({ trades: rows, duplicate_mode }),
+      method: 'POST', body: JSON.stringify({ trades: rows, duplicate_mode, source_hashes: sourceHashes, idempotency_key: idempotencyKey }),
     });
     onImported(result.trades);
     if (result.trades.length > 0) {
@@ -71,9 +77,13 @@ export default function TradeImportDrawer({ isOpen, onClose, onImported, embedde
     if (rows.some(row => !row.currency?.trim())) { setError('Set the original currency for every row before importing.'); return; }
     setSaving(true); setError(null); setNotice(null);
     try {
-      const check = await apiRequest<{ duplicates: DuplicateMatch[] }>('/api/today/import/trades/check', {
-        method: 'POST', body: JSON.stringify({ trades: rows }),
+      const check = await apiRequest<{ duplicates: DuplicateMatch[]; duplicate_sources?: string[] }>('/api/today/import/trades/check', {
+        method: 'POST', body: JSON.stringify({ trades: rows, source_hashes: sourceHashes, idempotency_key: idempotencyKey }),
       });
+      if (check.duplicate_sources?.length) {
+        setError('This exact source file was imported before. No records were added.');
+        return;
+      }
       if (check.duplicates.length > 0) {
         setDuplicateMatches(check.duplicates);
         return;
@@ -96,7 +106,7 @@ export default function TradeImportDrawer({ isOpen, onClose, onImported, embedde
       {!rows.length && <button disabled={loading} onClick={() => inputRef.current?.click()} className="flex w-full flex-col items-center rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-slate-600 hover:border-[#EE6C4D]">
         {loading ? <Loader2 className="animate-spin text-[#EE6C4D]" /> : <Upload className="text-[#EE6C4D]" />}<span className="mt-2 text-[12px] font-bold">Choose a file</span><span className="mt-1 text-[10px]">CSV / TXT / XLSX / PNG / JPEG / WebP</span>
       </button>}
-      <input ref={inputRef} type="file" className="hidden" accept=".csv,.txt,.xls,.xlsx,image/png,image/jpeg,image/webp" onChange={e => void selectFile(e.target.files?.[0])} />
+      <input ref={inputRef} type="file" className="hidden" accept=".csv,.txt,.xls,.xlsx,image/png,image/jpeg,image/webp" onChange={e => { void selectFile(e.target.files?.[0]); e.target.value = ''; }} />
       {error && <p className="mt-3 rounded-lg bg-rose-50 p-2 text-[11px] text-rose-700">{error}</p>}
       {notice && <p role="status" className="mt-3 rounded-lg bg-emerald-50 p-2 text-[11px] text-emerald-700">{notice}</p>}
       {warnings.map(warning => <p key={warning} className="mt-2 rounded-lg bg-amber-50 p-2 text-[10px] text-amber-700">{warning}</p>)}

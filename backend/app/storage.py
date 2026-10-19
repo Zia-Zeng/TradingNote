@@ -169,6 +169,7 @@ def create_trade(trade: dict[str, Any]) -> dict[str, Any]:
             "INSERT INTO trades (id, payload, created_at, updated_at) VALUES (?, ?, ?, ?)",
             (trade["id"], json.dumps(trade, ensure_ascii=False), now, now),
         )
+        _invalidate_portfolio_states(connection, str(trade.get("time") or trade.get("trade_date") or "")[:10])
     return trade
 
 
@@ -189,14 +190,31 @@ def get_trade(trade_id: str) -> dict[str, Any] | None:
 def update_trade(trade_id: str, trade: dict[str, Any]) -> dict[str, Any] | None:
     now = datetime.now(timezone.utc).isoformat()
     with database() as connection:
+        previous = connection.execute("SELECT payload FROM trades WHERE id = ?", (trade_id,)).fetchone()
         cursor = connection.execute(
             "UPDATE trades SET payload = ?, updated_at = ? WHERE id = ?",
             (json.dumps(trade, ensure_ascii=False), now, trade_id),
         )
+        if cursor.rowcount and previous:
+            old_trade = json.loads(previous["payload"])
+            dates = [str(value or "")[:10] for value in (old_trade.get("time") or old_trade.get("trade_date"), trade.get("time") or trade.get("trade_date"))]
+            _invalidate_portfolio_states(connection, min((value for value in dates if value), default=""))
     return trade if cursor.rowcount else None
 
 
 def delete_trade(trade_id: str) -> bool:
     with database() as connection:
+        previous = connection.execute("SELECT payload FROM trades WHERE id = ?", (trade_id,)).fetchone()
         cursor = connection.execute("DELETE FROM trades WHERE id = ?", (trade_id,))
+        if cursor.rowcount and previous:
+            trade = json.loads(previous["payload"])
+            _invalidate_portfolio_states(connection, str(trade.get("time") or trade.get("trade_date") or "")[:10])
     return cursor.rowcount > 0
+
+
+def _invalidate_portfolio_states(connection: sqlite3.Connection, from_date: str) -> None:
+    if not from_date:
+        return
+    exists = connection.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'today_portfolio_daily_states'").fetchone()
+    if exists:
+        connection.execute("DELETE FROM today_portfolio_daily_states WHERE state_date >= ?", (from_date,))

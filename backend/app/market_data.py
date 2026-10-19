@@ -7,8 +7,8 @@ import json
 import os
 import re
 import threading
-import time
-from datetime import date, datetime, time, timedelta, timezone
+import time as clock_time
+from datetime import date, datetime, time as datetime_time, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -82,8 +82,6 @@ def _bar(row: dict[str, Any]) -> dict[str, Any] | None:
         if value is not None:
             result[key] = value
     return result
-
-
 def _rows_from_payload(payload: Any) -> list[dict[str, Any]]:
     """Extract record-shaped rows from common JSON and MCP tool response shapes."""
     if isinstance(payload, list):
@@ -260,9 +258,17 @@ async def fetch_a_share_history(code: str, start_date: date | str, end_date: dat
     if start > end:
         raise ValueError("start_date must be earlier than or equal to end_date.")
 
-    configured = os.getenv("MARKET_DATA_PROVIDER_ORDER", "wind,akshare,baostock")
+    # BaoStock is the most reliable local fallback in the desktop runtime.
+    # AkShare's Eastmoney endpoint can be blocked by the machine proxy, so keep
+    # it available without making every request wait on it before BaoStock.
+    # Yahoo's chart endpoint has a bounded HTTP timeout and does not require the
+    # Wind MCP session handshake. Try it first so a stalled MCP connection can
+    # never prevent ordinary A-share daily bars from reaching the calendar.
+    configured = os.getenv("MARKET_DATA_PROVIDER_ORDER", "yahoo,baostock,akshare,wind")
     provider_order = [name.strip().lower() for name in configured.split(",") if name.strip()]
-    providers = {"wind": "Wind Finmarket", "akshare": "AkShare", "baostock": "BaoStock"}
+    if "yahoo" not in provider_order:
+        provider_order.insert(0, "yahoo")
+    providers = {"yahoo": "Yahoo Finance", "wind": "Wind Finmarket", "akshare": "AkShare", "baostock": "BaoStock"}
     unknown = [name for name in provider_order if name not in providers]
     if unknown:
         raise ValueError(f"Unknown market data provider(s): {', '.join(unknown)}.")
@@ -272,28 +278,22 @@ async def fetch_a_share_history(code: str, start_date: date | str, end_date: dat
     for provider in provider_order:
         tried.append(providers[provider])
         try:
-            if provider == "wind":
-                bars = await asyncio.wait_for(_wind_history(normalized_code, start, end), timeout=25)
+            if provider == "yahoo":
+                yahoo_code = _wind_code(normalized_code).replace(".SH", ".SS")
+                result = await asyncio.wait_for(run_in_threadpool(_yahoo_history, yahoo_code, start, end), timeout=14)
+                bars = result.get("bars", [])
+            elif provider == "wind":
+                bars = await asyncio.wait_for(_wind_history(normalized_code, start, end), timeout=12)
             elif provider == "akshare":
-                bars = await run_in_threadpool(_akshare_history, normalized_code, start, end)
+                bars = await asyncio.wait_for(run_in_threadpool(_akshare_history, normalized_code, start, end), timeout=8)
             else:
-                bars = await run_in_threadpool(_baostock_history, normalized_code, start, end)
+                bars = await asyncio.wait_for(run_in_threadpool(_baostock_history, normalized_code, start, end), timeout=8)
             if bars:
                 return _response(normalized_code, bars, providers[provider], tried)
             failures.append(f"{provider}: empty response")
         except Exception as exc:
             # Keep details out of API responses/logs because MCP errors can contain request metadata.
             failures.append(f"{provider}: {type(exc).__name__}")
-
-    # Yahoo's public daily chart is a useful final source when regional providers are down.
-    yahoo_code = _wind_code(normalized_code).replace(".SH", ".SS")
-    try:
-        result = await run_in_threadpool(_yahoo_history, yahoo_code, start, end)
-        if result["bars"]:
-            return _response(normalized_code, result["bars"], "Yahoo Finance", [*tried, "Yahoo Finance"])
-        failures.append("yahoo: empty response")
-    except Exception as exc:
-        failures.append(f"yahoo: {type(exc).__name__}")
 
     raise RuntimeError("All configured A-share history providers failed (" + "; ".join(failures) + ").")
 
@@ -307,8 +307,8 @@ def _yahoo_history(code: str, start_date: str, end_date: str) -> dict[str, Any]:
     start = date.fromisoformat(start_date) - timedelta(days=14)
     end = date.fromisoformat(end_date) + timedelta(days=1)
     params = urlencode({
-        "period1": int(datetime.combine(start, time.min, timezone.utc).timestamp()),
-        "period2": int(datetime.combine(end, time.min, timezone.utc).timestamp()),
+        "period1": int(datetime.combine(start, datetime_time.min, timezone.utc).timestamp()),
+        "period2": int(datetime.combine(end, datetime_time.min, timezone.utc).timestamp()),
         "interval": "1d",
         "events": "div,splits",
     })
@@ -350,13 +350,13 @@ async def fetch_daily_history(code: str, market: str, start_date: date | str, en
     cache_key = (normalized_market, normalized_code.upper(), start, end)
     with _HISTORY_CACHE_LOCK:
         cached = _HISTORY_CACHE.get(cache_key)
-        if cached and cached[0] > time.monotonic():
+        if cached and cached[0] > clock_time.monotonic():
             return cached[1]
     if normalized_market == "CN" and re.fullmatch(r"\d{6}(?:\.(?:SH|SZ|BJ|SS))?", normalized_code, re.IGNORECASE):
         result = await fetch_a_share_history(normalized_code[:6], start, end)
     else:
         yahoo_code = f"{normalized_code}.HK" if normalized_market == "HK" and re.fullmatch(r"\d{1,5}", normalized_code) else normalized_code
-        result = await run_in_threadpool(_yahoo_history, yahoo_code, start, end)
+        result = await asyncio.wait_for(run_in_threadpool(_yahoo_history, yahoo_code, start, end), timeout=14)
     with _HISTORY_CACHE_LOCK:
-        _HISTORY_CACHE[cache_key] = (time.monotonic() + 300, result)
+        _HISTORY_CACHE[cache_key] = (clock_time.monotonic() + 300, result)
     return result

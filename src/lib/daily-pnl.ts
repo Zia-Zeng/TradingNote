@@ -4,6 +4,21 @@ export type DailyPnlDay = {
   date: string;
   pnl_by_currency: Record<string, number>;
   complete: boolean;
+  daily_state?: {
+    cash_by_currency: Record<string, number>;
+    holdings_market_value_by_currency: Record<string, number>;
+    total_assets_by_currency: Record<string, number>;
+    realized_pnl_by_currency: Record<string, number>;
+    realized_pnl_to_date_by_currency: Record<string, number>;
+    unrealized_pnl_by_currency: Record<string, number>;
+    holding_pnl_by_currency: Record<string, number>;
+    positions: Array<{ symbol: string; code: string; market: string; currency: string; quantity: number; average_cost: number; close: number; market_value: number; unrealized_pnl: number }>;
+    total_assets_complete?: boolean;
+    complete: boolean;
+  };
+  reason?: string;
+  missing_instruments?: Array<{ code: string; symbol: string; market: string }>;
+  snapshot_mismatch?: boolean;
 };
 
 export type DailyPnlResult = {
@@ -24,8 +39,10 @@ export type DailyPnlResult = {
 
 export const PORTFOLIO_SNAPSHOT_CHANGED = 'tradingnote:portfolio-snapshot-changed';
 
-export function notifyPortfolioSnapshotChanged() {
-  window.dispatchEvent(new Event(PORTFOLIO_SNAPSHOT_CHANGED));
+export type PortfolioSnapshotChangedDetail = { date?: string };
+
+export function notifyPortfolioSnapshotChanged(date?: string) {
+  window.dispatchEvent(new CustomEvent<PortfolioSnapshotChangedDetail>(PORTFOLIO_SNAPSHOT_CHANGED, { detail: { date } }));
 }
 
 export function getDailyPnl(startDate: string, endDate: string): Promise<DailyPnlResult> {

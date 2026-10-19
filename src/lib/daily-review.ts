@@ -4,14 +4,57 @@ export type DailyTradeReview = {
   trade_id: string;
   symbol: string;
   review: string;
+  evidence_refs: string[];
+};
+
+export type DailyTradeReviewStats = {
+  trade_count: number;
+  motive_count: number;
+  plan_count: number;
+  trade_note_count: number;
+  daily_note_count: number;
+};
+
+export type DailyTradeReviewEvidence = {
+  ref_id: string;
+  label: string;
+  excerpt: string;
+};
+
+export type DailySummaryFacts = {
+  portfolio_result: {
+    date?: string;
+    pnl_by_currency?: Record<string, number>;
+    attribution?: Array<{
+      symbol: string;
+      code: string;
+      market: string;
+      currency: string;
+      pnl: number;
+      change_pct: number | null;
+    }>;
+    complete?: boolean;
+  } | null;
+  portfolio_warnings: string[];
+  market_benchmarks: Array<{
+    market: string;
+    name: string;
+    date: string;
+    change_pct: number | null;
+  }>;
 };
 
 export type DailyReview = {
   trade_date: string;
   trade_count: number;
   summary: string | null;
+  summary_facts: DailySummaryFacts | null;
   summary_generated_at: string | null;
   trade_reviews: DailyTradeReview[] | null;
+  trade_review_overview: string | null;
+  trade_review_focus: string[];
+  trade_review_stats: DailyTradeReviewStats | null;
+  trade_review_evidence: DailyTradeReviewEvidence[];
   trade_reviews_generated_at: string | null;
 };
 
@@ -29,10 +72,6 @@ async function getRequiredDailyReview(date: string): Promise<DailyReview> {
   const review = await getDailyReview(date);
   if (!review) throw new Error('The generated review could not be loaded. Please refresh and try again.');
   return review;
-}
-
-export function generateDailyReview(date: string): Promise<DailyReview> {
-  return getRequiredDailyReview(date);
 }
 
 export async function generateDailySummary(date: string): Promise<DailyReview> {
