@@ -8,7 +8,7 @@ import {
   Settings, Play, ArrowLeft, CheckCircle2, Search, X, Loader2, MessageSquarePlus
 } from 'lucide-react';
 import { 
-  ComposedChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Scatter 
+  ComposedChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Scatter, ReferenceLine
 } from 'recharts';
 import { motion, AnimatePresence } from 'framer-motion';
 import { readLocalResult, saveLocalResult } from '../lib/saved-results';
@@ -43,6 +43,44 @@ interface Message {
   content: React.ReactNode;
 }
 
+type BacktestResult = {
+  strategy: string;
+  ticker: string;
+  start_date: string;
+  end_date: string;
+  as_of: string;
+  months: number;
+  cached: boolean;
+  stats: { return_pct: number; max_drawdown_pct: number; closed_trades: number; winning_trades: number; win_rate_pct: number | null };
+  chart: Array<{ date: string; return_pct: number }>;
+  chart_error: string | null;
+  trades: Array<{ date: string; time: string; side: 'buy' | 'sell'; price: number; quantity: number }>;
+};
+
+const savedBacktestKey = 'tradingnote:backtest-tasks';
+
+function readSavedBacktestTasks(): any[] {
+  const stored = readLocalResult<any[]>(savedBacktestKey) || [];
+  return stored.filter(task => task?.result?.stats && typeof task.result.stats.return_pct === 'number')
+    .map(task => ({
+      id: task.id, strategy: task.strategy, ticker: task.ticker, savedAt: task.savedAt,
+      result: { months: task.result.months || 36, stats: task.result.stats },
+    }));
+}
+
+const inFlightBacktests = new Map<string, Promise<BacktestResult>>();
+
+function runBacktest(strategy: string, ticker: string, months: number): Promise<BacktestResult> {
+  const key = `${strategy}:${ticker}:${months}`;
+  let request = inFlightBacktests.get(key);
+  if (!request) {
+    request = apiRequest<BacktestResult>('/api/backtest/run', { method: 'POST', body: JSON.stringify({ strategy, ticker, months }) });
+    inFlightBacktests.set(key, request);
+    void request.finally(() => { if (inFlightBacktests.get(key) === request) inFlightBacktests.delete(key); }).catch(() => {});
+  }
+  return request;
+}
+
 const STRATEGIES = [
   { id: 'sma', name: 'SMA Crossover', logic: 'Catch trend change via moving average crossing', buyDesc: 'SMA20 crosses above SMA50', sellDesc: 'SMA20 crosses below SMA50' },
   { id: 'rsi', name: 'RSI Bounce', logic: 'Trade overbought / oversold momentum', buyDesc: 'RSI(14) < 30 then rebounds above 30', sellDesc: 'RSI(14) > 70 then falls below 70' },
@@ -51,43 +89,15 @@ const STRATEGIES = [
   { id: 'volume', name: 'Volume Confirmed Breakout', logic: 'Volume confirms valid breakout', buyDesc: 'Price breaks resistance, vol ≥ 1.5x avg', sellDesc: 'Price breaks support, volume spikes' }
 ];
 
-const baseChartData = [
-  { date: '06-01', price: 100 }, { date: '06-02', price: 98 }, { date: '06-03', price: 95 },
-  { date: '06-04', price: 97 }, { date: '06-05', price: 102 }, { date: '06-06', price: 105 },
-  { date: '06-07', price: 108 }, { date: '06-08', price: 112 }, { date: '06-09', price: 115 },
-  { date: '06-10', price: 118 }, { date: '06-11', price: 116 }, { date: '06-12', price: 110 },
-  { date: '06-13', price: 108 }, { date: '06-14', price: 105 }, { date: '06-15', price: 107 },
-  { date: '06-16', price: 111 }, { date: '06-17', price: 114 }, { date: '06-18', price: 113 },
-  { date: '06-19', price: 110 }, { date: '06-20', price: 105 }
+const BACKTEST_PERIODS = [
+  { months: 6, label: '6 months' },
+  { months: 12, label: '1 year' },
+  { months: 36, label: '3 years' },
 ];
-
-const generateChartData = (strategy: string) => {
-  const data = JSON.parse(JSON.stringify(baseChartData));
-  if (strategy === 'sma') {
-    data[4].buyPrice = 102; data[11].sellPrice = 110;
-  } else if (strategy === 'rsi') {
-    data[2].buyPrice = 95; data[9].sellPrice = 118;
-  } else if (strategy === 'macd') {
-    data[14].buyPrice = 107; data[17].sellPrice = 113;
-  } else if (strategy === 'bollinger') {
-    data[6].buyPrice = 108; data[13].sellPrice = 105;
-  } else if (strategy === 'volume') {
-    data[5].buyPrice = 105; data[12].sellPrice = 108;
-  }
-  return data;
-};
-
-const STATS = {
-  sma: { winRate: '65%', return: '+12.4%', trades: 14, maxDrawdown: '-4.2%' },
-  rsi: { winRate: '72%', return: '+18.1%', trades: 21, maxDrawdown: '-3.8%' },
-  macd: { winRate: '58%', return: '+9.2%', trades: 11, maxDrawdown: '-6.1%' },
-  bollinger: { winRate: '60%', return: '+15.5%', trades: 8, maxDrawdown: '-8.0%' },
-  volume: { winRate: '68%', return: '+22.0%', trades: 16, maxDrawdown: '-5.5%' },
-};
 
 const BuyMarker = (props: any) => {
   const { cx, cy, payload } = props;
-  if (!payload || payload.buyPrice === undefined) return null;
+  if (!payload || payload.buyReturn === undefined) return null;
   return (
     <g transform={`translate(${cx},${cy})`}>
       <rect x={-8} y={-20} width={16} height={12} fill="#10b981" rx={2} />
@@ -99,7 +109,7 @@ const BuyMarker = (props: any) => {
 
 const SellMarker = (props: any) => {
   const { cx, cy, payload } = props;
-  if (!payload || payload.sellPrice === undefined) return null;
+  if (!payload || payload.sellReturn === undefined) return null;
   return (
     <g transform={`translate(${cx},${cy})`}>
       <rect x={-8} y={8} width={16} height={12} fill="#ef4444" rx={2} />
@@ -123,6 +133,11 @@ export default function Agent() {
   const action = searchParams.get('action');
   const step = searchParams.get('step');
   const tab = searchParams.get('tab') || 'chat';
+  const backtestStep = searchParams.get('bt_step');
+  const backtestStrategy = searchParams.get('strategy') || '';
+  const backtestTicker = searchParams.get('ticker') || '';
+  const requestedMonths = Number(searchParams.get('months'));
+  const backtestMonths = BACKTEST_PERIODS.some(period => period.months === requestedMonths) ? requestedMonths : 36;
   const reference = searchParams.get('ref');
   const isAssetReference = Boolean(reference?.startsWith('detail-'));
   const isDailyReference = Boolean(reference && /^daily-\d{4}-\d{2}-\d{2}$/.test(reference));
@@ -134,7 +149,10 @@ export default function Agent() {
   const [savedPlan, setSavedPlan] = useState(false);
   const [savedReview, setSavedReview] = useState(false);
   const [savedTask, setSavedTask] = useState(false);
-  const [savedTasks, setSavedTasks] = useState<any[]>(() => readLocalResult<any[]>('tradingnote:backtest-tasks') || []);
+  const [savedTasks, setSavedTasks] = useState<any[]>(readSavedBacktestTasks);
+  const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
+  const [backtestLoading, setBacktestLoading] = useState(false);
+  const [backtestError, setBacktestError] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -147,7 +165,34 @@ export default function Agent() {
   const skipNextRouteSyncRef = useRef(false);
   
   const navigate = useNavigate();
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  const keepAtBottomRef = useRef(true);
+
+  useEffect(() => {
+    const tasks = readSavedBacktestTasks();
+    saveLocalResult(savedBacktestKey, tasks);
+    setSavedTasks(tasks);
+  }, []);
+
+  useEffect(() => {
+    if (tab !== 'backtest' || backtestStep !== '3' || !backtestStrategy || !backtestTicker) return;
+    let active = true;
+    setBacktestResult(null);
+    setBacktestError(null);
+    setBacktestLoading(true);
+    void runBacktest(backtestStrategy, backtestTicker, backtestMonths).then(result => {
+      if (active) setBacktestResult(result);
+    }).catch(error => {
+      if (active) setBacktestError(error instanceof Error ? error.message : 'Backtest failed. Please retry.');
+    }).finally(() => {
+      if (active) setBacktestLoading(false);
+    });
+    return () => { active = false; };
+  }, [tab, backtestStep, backtestStrategy, backtestTicker, backtestMonths]);
+
+  useEffect(() => {
+    keepAtBottomRef.current = true;
+  }, [tab, backtestStep, backtestStrategy, backtestTicker, backtestMonths, searchParams.get('task_detail')]);
 
   useEffect(() => {
     if (skipNextRouteSyncRef.current) {
@@ -164,7 +209,7 @@ export default function Agent() {
       
       const presetMsg = (
         <div className="w-[260px] max-w-full">
-          <p className="mb-2 text-[12px] leading-relaxed">What strategy would you like to backtest? Describe your idea or select a preset below:</p>
+          <p className="mb-2 text-[12px] leading-relaxed">Select one of the five strategies to backtest:</p>
           <div className="space-y-2">
             {STRATEGIES.map(s => (
               <div 
@@ -186,11 +231,11 @@ export default function Agent() {
       if (btStep || showDetail) {
         const selectedStrat = STRATEGIES.find(s => s.id === strat);
         msgs.push({ id: 'bt_u1', role: 'user', content: `Let's test ${selectedStrat?.name || 'the strategy'}` });
-        msgs.push({ id: 'bt_a1', role: 'agent', content: "Great! Please provide the target ticker symbol (e.g., AAPL, BTC, 601899)." });
+        msgs.push({ id: 'bt_a1', role: 'agent', content: "Great! Enter an A-share code or US ticker (e.g., 601899 or AAPL)." });
       }
 
       if (btStep === '2' || btStep === '3' || showDetail) {
-        msgs.push({ id: 'bt_u2', role: 'user', content: tick || 'AAPL' });
+        msgs.push({ id: 'bt_u2', role: 'user', content: tick || '' });
         
         const configMsg = (
           <div className="w-[240px] max-w-full">
@@ -201,9 +246,31 @@ export default function Agent() {
               <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">Target Ticker</div>
               <div className="text-[12px] font-bold text-[#0B2545] uppercase">{tick}</div>
             </div>
+            {btStep === '2' ? (
+              <div className="mb-2">
+                <div className="mb-1.5 text-[10px] font-bold text-slate-500">Backtest period</div>
+                <div className="grid grid-cols-3 gap-1">
+                  {BACKTEST_PERIODS.map(period => (
+                    <button key={period.months} type="button" onClick={() => {
+                      const next = new URLSearchParams(searchParams);
+                      next.set('months', String(period.months));
+                      setSearchParams(next);
+                    }} className={cn('rounded-md border px-1 py-1.5 text-[10px] font-bold', backtestMonths === period.months ? 'border-[#0B2545] bg-[#0B2545] text-white' : 'border-slate-200 bg-white text-slate-600')}>
+                      {period.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1 text-[9px] text-slate-500">Shorter periods use fewer daily bars; market data retrieval may still take time.</p>
+              </div>
+            ) : (
+              <div className="mb-2 flex items-center justify-between text-[10px] text-slate-500">
+                <span>Period: {BACKTEST_PERIODS.find(period => period.months === backtestMonths)?.label}</span>
+                <button type="button" className="font-bold text-[#0B2545] underline" onClick={() => setSearchParams({ tab: 'backtest', bt_step: '2', strategy: strat || 'sma', ticker: tick || '', months: String(backtestMonths) })}>Change</button>
+              </div>
+            )}
             {btStep === '2' && (
               <button 
-                onClick={() => setSearchParams({ tab: 'backtest', bt_step: '3', strategy: strat || 'sma', ticker: tick || 'AAPL' })}
+                onClick={() => setSearchParams({ tab: 'backtest', bt_step: '3', strategy: strat || 'sma', ticker: tick || '', months: String(backtestMonths) })}
                 className="w-full bg-[#0B2545] text-white py-2 rounded-lg text-[12px] font-bold active:bg-[#134074] shadow-sm flex items-center justify-center gap-1.5"
               >
                 <Play size={12} fill="currentColor" /> Run Test
@@ -215,81 +282,97 @@ export default function Agent() {
       }
 
       if (btStep === '3' || showDetail) {
-        const stats = STATS[strat as keyof typeof STATS] || STATS.sma;
-        const taskKey = `${strat || 'sma'}-${tick || 'AAPL'}`;
-        const existingTasks = readLocalResult<any[]>('tradingnote:backtest-tasks') || [];
+        const taskKey = `${strat}-${tick}-${backtestMonths}`;
+        const existingTasks = readSavedBacktestTasks();
         setSavedTask(existingTasks.some(task => task.id === taskKey));
-        const resultMsg = (
-          <div className="w-[240px] max-w-full">
-            <p className="mb-2 text-[12px] leading-relaxed">Backtest completed successfully. Save it to your tasks to keep the result.</p>
-            <div className="grid grid-cols-2 gap-2 mb-2">
-              <div className="bg-emerald-50 border border-emerald-100 p-2.5 rounded-lg shadow-sm">
-                <div className="text-[9px] text-emerald-600 font-bold uppercase tracking-wider mb-0.5">Win Rate</div>
-                <div className="text-[14px] font-bold font-mono text-emerald-700">{stats.winRate}</div>
+        if (backtestLoading) {
+          msgs.push({ id: 'bt_a3', role: 'agent', content: <div className="flex items-center gap-2 text-[12px]"><Loader2 size={14} className="animate-spin" />Running the backtest. This may take a few minutes…</div> });
+        } else if (backtestError) {
+          msgs.push({ id: 'bt_a3', role: 'agent', content: <p role="alert" className="text-[12px] text-rose-700">{backtestError}</p> });
+        } else if (backtestResult) {
+          const stats = backtestResult.stats;
+          const resultMsg = (
+            <div className="w-[240px] max-w-full">
+              <p className="mb-2 text-[12px] leading-relaxed">Backtest completed{backtestResult.cached ? ' · cached result' : ''} · {backtestResult.start_date} to {backtestResult.as_of}</p>
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <div className="bg-emerald-50 border border-emerald-100 p-2.5 rounded-lg shadow-sm">
+                  <div className="text-[9px] text-emerald-600 font-bold uppercase tracking-wider mb-0.5">Win Rate</div>
+                  <div className="text-[14px] font-bold font-mono text-emerald-700">{stats.win_rate_pct === null ? '—' : `${stats.win_rate_pct}%`}</div>
+                </div>
+                <div className="bg-emerald-50 border border-emerald-100 p-2.5 rounded-lg shadow-sm">
+                  <div className="text-[9px] text-emerald-600 font-bold uppercase tracking-wider mb-0.5">Return</div>
+                  <div className="text-[14px] font-bold font-mono text-emerald-700">{stats.return_pct > 0 ? '+' : ''}{stats.return_pct}%</div>
+                </div>
               </div>
-              <div className="bg-emerald-50 border border-emerald-100 p-2.5 rounded-lg shadow-sm">
-                <div className="text-[9px] text-emerald-600 font-bold uppercase tracking-wider mb-0.5">Return</div>
-                <div className="text-[14px] font-bold font-mono text-emerald-700">{stats.return}</div>
-              </div>
-            </div>
-            <button
-              onClick={() => {
-                const tasks = readLocalResult<any[]>('tradingnote:backtest-tasks') || [];
-                const nextTasks = [{ id: taskKey, strategy: STRATEGIES.find(s => s.id === strat)?.name || 'SMA Crossover', ticker: tick || 'AAPL', stats, savedAt: new Date().toISOString() }, ...tasks.filter(task => task.id !== taskKey)];
-                saveLocalResult('tradingnote:backtest-tasks', nextTasks);
-                setSavedTasks(nextTasks);
-                setSavedTask(true);
-              }}
-              className="w-full mb-2 bg-emerald-50 border border-emerald-200 text-emerald-800 py-2 rounded-lg text-[11px] font-bold active:bg-emerald-100"
-            >{savedTask ? 'Saved to Tasks' : 'Save to Tasks'}</button>
-            {!showDetail && (
-              <button 
+              <p className="mb-2 text-[10px] leading-relaxed text-slate-500">
+                Win rate: {stats.closed_trades === 0 ? 'no closed trades' : `${stats.winning_trades}/${stats.closed_trades} profitable trades`}. Return: change since the period start.
+              </p>
+              <p className="mb-2 text-[10px] text-slate-500">Max drawdown −{stats.max_drawdown_pct}%</p>
+              <button
                 onClick={() => {
-                  const next = new URLSearchParams({ tab: 'backtest', bt_step: '3', task_detail: '1' });
-                  if (strat) next.set('strategy', strat);
-                  if (tick) next.set('ticker', tick);
-                  setSearchParams(next);
+                  const tasks = readSavedBacktestTasks();
+                  const nextTasks = [{ id: taskKey, strategy: STRATEGIES.find(s => s.id === strat)?.name, ticker: backtestResult.ticker, result: { months: backtestMonths, stats }, savedAt: new Date().toISOString() }, ...tasks.filter(task => task.id !== taskKey)];
+                  saveLocalResult(savedBacktestKey, nextTasks);
+                  setSavedTasks(nextTasks);
+                  setSavedTask(true);
                 }}
-                className="w-full bg-white border border-slate-200 text-[#0B2545] py-2 rounded-lg text-[11px] font-bold active:bg-slate-50 shadow-sm"
-              >
-                View Full Chart
-              </button>
-            )}
-          </div>
-        );
-        msgs.push({ id: 'bt_a3', role: 'agent', content: resultMsg });
+                className="w-full mb-2 bg-emerald-50 border border-emerald-200 text-emerald-800 py-2 rounded-lg text-[11px] font-bold active:bg-emerald-100"
+              >{savedTask ? 'Saved to Tasks' : 'Save to Tasks'}</button>
+              {!showDetail && (
+                <button onClick={() => setSearchParams({ tab: 'backtest', bt_step: '3', task_detail: '1', strategy: strat || 'sma', ticker: tick || '', months: String(backtestMonths) })}
+                  className="w-full bg-white border border-slate-200 text-[#0B2545] py-2 rounded-lg text-[11px] font-bold active:bg-slate-50 shadow-sm">
+                  View Full Chart
+                </button>
+              )}
+            </div>
+          );
+          msgs.push({ id: 'bt_a3', role: 'agent', content: resultMsg });
+        }
       }
 
-      if (showDetail) {
+      if (showDetail && backtestResult) {
         msgs.push({ id: 'bt_u3', role: 'user', content: "Show me the full chart" });
-        
+        const fills = new Map(backtestResult.trades.map(trade => [trade.date, trade]));
+        const chartData = backtestResult.chart.map(point => {
+          const fill = fills.get(point.date);
+          return { ...point, buyReturn: fill?.side === 'buy' ? point.return_pct : undefined, sellReturn: fill?.side === 'sell' ? point.return_pct : undefined };
+        });
         const chartMsg = (
-          <div className="w-[270px] max-w-full">
+          <div className="w-[310px] max-w-full">
             <div className="flex items-center gap-1.5 mb-2">
               <LineChart size={14} className="text-[#EE6C4D]" />
-              <span className="text-[12px] font-bold text-[#0B2545]">Simulated Signals</span>
+              <span className="text-[12px] font-bold text-[#0B2545]">Strategy Return & Trades</span>
             </div>
-            <div className="h-[180px] w-full -ml-3 mt-2 bg-white rounded-lg pt-2 pb-1 pr-1 border border-slate-100 shadow-sm">
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={generateChartData(strat || 'sma')} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
+            <div className="h-[180px] w-full min-w-0 mt-2 bg-white rounded-lg pt-2 pb-1 border border-slate-100 shadow-sm">
+              {chartData.length ? <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={chartData} margin={{ top: 10, right: 0, left: 0, bottom: 0 }}>
                   <defs>
-                    <linearGradient id="colorPriceBacktest" x1="0" y1="0" x2="0" y2="1">
+                    <linearGradient id="colorReturnBacktest" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#0B2545" stopOpacity={0.2}/>
                       <stop offset="95%" stopColor="#0B2545" stopOpacity={0}/>
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                  <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{fontSize: 9, fill: '#94a3b8', fontWeight: 500}} dy={10} minTickGap={15} />
-                  <YAxis domain={['dataMin - 5', 'dataMax + 5']} axisLine={false} tickLine={false} tick={{fontSize: 9, fill: '#94a3b8', fontWeight: 500, fontFamily: 'monospace'}} dx={-5} orientation="right" />
-                  <Area type="monotone" dataKey="price" stroke="#0B2545" strokeWidth={2} fillOpacity={1} fill="url(#colorPriceBacktest)" />
-                  <Scatter dataKey="buyPrice" shape={<BuyMarker />} />
-                  <Scatter dataKey="sellPrice" shape={<SellMarker />} />
+                  <ReferenceLine y={0} stroke="#94a3b8" strokeDasharray="3 3" />
+                  <XAxis dataKey="date" tickFormatter={value => String(value).slice(5)} axisLine={false} tickLine={false} tick={{fontSize: 9, fill: '#94a3b8', fontWeight: 500}} dy={10} minTickGap={15} />
+                  <YAxis width={48} domain={['auto', 'auto']} tickFormatter={value => `${Number(value).toFixed(1)}%`} axisLine={false} tickLine={false} tick={{fontSize: 9, fill: '#94a3b8', fontWeight: 500, fontFamily: 'monospace'}} dx={-2} orientation="right" />
+                  <Area type="monotone" dataKey="return_pct" stroke="#0B2545" strokeWidth={2} fillOpacity={1} fill="url(#colorReturnBacktest)" />
+                  <Scatter dataKey="buyReturn" shape={<BuyMarker />} />
+                  <Scatter dataKey="sellReturn" shape={<SellMarker />} />
                 </ComposedChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer> : <p className="p-4 text-[11px] text-slate-500">{backtestResult.chart_error || 'Return chart is unavailable.'}</p>}
             </div>
-            <p className="text-[10px] text-slate-500 mt-2.5 bg-slate-50 p-2 rounded-md border border-slate-100 font-medium leading-relaxed">
-              Green <strong className="text-[#10b981]">B</strong> marks Buy, red <strong className="text-[#ef4444]">S</strong> marks Sell. You can ask me to adjust the parameters or test another ticker.
+            <p className="mt-2 rounded-md bg-slate-50 px-2 py-1.5 text-[10px] leading-relaxed text-slate-500">
+              Return starts at 0%. B/S mark filled trades.
             </p>
+            <div className="mt-2 max-h-40 overflow-y-auto space-y-1">
+              {backtestResult.trades.length === 0 ? <p className="text-[10px] text-slate-500">No filled trades in this period.</p> : backtestResult.trades.map((trade, index) => (
+                <div key={`${trade.time}-${index}`} className="flex justify-between text-[10px] border-b border-slate-100 py-1">
+                  <span>{trade.date} · <b className={trade.side === 'buy' ? 'text-emerald-700' : 'text-rose-700'}>{trade.side.toUpperCase()}</b></span>
+                  <span className="font-mono">{backtestResult.ticker[0] >= 'A' && backtestResult.ticker[0] <= 'Z' ? `$${trade.price.toFixed(2)}` : `¥${trade.price.toFixed(2)} × ${trade.quantity}`}</span>
+                </div>
+              ))}
+            </div>
           </div>
         );
         msgs.push({ id: 'bt_a4', role: 'agent', content: chartMsg });
@@ -789,12 +872,15 @@ export default function Agent() {
         setMessages([]); // default state / landing for chat
       }
     }
-  }, [tradeId, action, step, tab, reference, searchParams, setSearchParams]);
+  }, [tradeId, action, step, tab, reference, searchParams, setSearchParams, backtestResult, backtestLoading, backtestError, backtestMonths, savedTask]);
 
   useEffect(() => {
-    setTimeout(() => {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, 100);
+    if (!keepAtBottomRef.current) return;
+    const frame = requestAnimationFrame(() => {
+      const scroller = chatScrollRef.current;
+      if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    });
+    return () => cancelAnimationFrame(frame);
   }, [messages]);
 
   const sendChatMessage = async (currentInput: string) => {
@@ -908,6 +994,7 @@ export default function Agent() {
       setIsSending(false);
       setInput('');
       setConversationId(history.conversation_id);
+      keepAtBottomRef.current = true;
       setMessages(history.messages.map((message, index) => ({
         id: `${history.conversation_id}_${index}`,
         role: message.role === 'assistant' ? 'agent' : 'user',
@@ -931,6 +1018,7 @@ export default function Agent() {
 
   const handleSend = () => {
     if (!input.trim() || isSending) return;
+    keepAtBottomRef.current = true;
     
     const currentInput = input.trim();
     setInput('');
@@ -947,10 +1035,13 @@ export default function Agent() {
     if (tab === 'backtest') {
       const btStep = searchParams.get('bt_step');
       if (btStep === '1') {
+        if (!/^(?:\d{6}(?:\.(?:SH|SZ|BJ))?|[A-Z][A-Z0-9.-]{0,15})$/i.test(currentInput)) {
+          setBacktestError('Enter an A-share code such as 601899 or a US ticker such as AAPL.');
+          setInput(currentInput);
+          return;
+        }
+        setBacktestError(null);
         setSearchParams({ tab: 'backtest', bt_step: '2', strategy: searchParams.get('strategy') || 'sma', ticker: currentInput.toUpperCase() });
-        return;
-      } else if (!btStep) {
-        setSearchParams({ tab: 'backtest', bt_step: '1', strategy: 'sma' });
         return;
       }
     }
@@ -1037,7 +1128,7 @@ export default function Agent() {
   const isLanding = messages.length === 0 && !tradeId && !action;
 
   return (
-    <div className="w-full h-full bg-[#F8F9FA] font-sans text-slate-900 flex flex-col relative overflow-hidden">
+    <div className="w-full h-full min-h-0 bg-[#F8F9FA] font-sans text-slate-900 flex flex-col relative overflow-hidden">
       {/* Header */}
       <div className="bg-white px-3 pt-[54px] pb-3 shadow-sm shrink-0 z-20 relative border-b border-slate-100 flex flex-col">
         <div className="flex items-center justify-between mb-3">
@@ -1112,7 +1203,7 @@ export default function Agent() {
       </div>
 
       {isLanding && tab === 'chat' ? (
-        <div className="flex-1 overflow-y-auto flex flex-col px-4 pt-8 pb-8 no-scrollbar items-center relative">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y flex flex-col px-4 pt-8 pb-8 items-center relative">
           
           <div className="text-center mb-8 w-full">
             <h2 className="text-[20px] font-bold text-[#0B2545] leading-snug tracking-tight mb-2">
@@ -1147,7 +1238,10 @@ export default function Agent() {
         </div>
       ) : (
         /* Chat Area (Used by both Chat and Backtest flows) */
-        <div className="flex-1 overflow-y-auto p-3 pb-6 space-y-5 no-scrollbar">
+        <div ref={chatScrollRef} onScroll={event => {
+          const scroller = event.currentTarget;
+          keepAtBottomRef.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+        }} className={cn('flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y p-3 space-y-5', tab === 'backtest' ? 'pb-[110px]' : 'pb-6')}>
           {messages.map((msg) => (
             <div key={msg.id} className={cn("flex w-full", msg.role === 'user' ? "justify-end" : "justify-start")}>
               <div className={cn("flex gap-2 max-w-[85%]", msg.role === 'user' ? "flex-row-reverse" : "flex-row")}>
@@ -1175,7 +1269,7 @@ export default function Agent() {
               </div>
             </div>
           ))}
-          <div ref={bottomRef} className="h-4" />
+          <div className="h-4" />
         </div>
       )}
 
@@ -1210,7 +1304,7 @@ export default function Agent() {
       )}
 
       {/* Fixed Bottom Area (Chat Input for both flows) */}
-      {(tab === 'chat' || tab === 'backtest') && (
+      {(tab === 'chat' || (tab === 'backtest' && backtestStep === '1')) && (
         <div className="shrink-0 w-full bg-white/95 backdrop-blur-xl border-t border-slate-100 z-10 px-3 pt-2 pb-[100px] shadow-[0_-4px_20px_rgba(0,0,0,0.02)]">
 
           {/* Quick Actions (Chat only) */}
@@ -1249,6 +1343,9 @@ export default function Agent() {
               </button>
             </div>
           )}
+          {tab === 'backtest' && backtestStep === '1' && backtestError && (
+            <p role="alert" className="mb-2 px-2.5 text-[11px] text-rose-700">{backtestError}</p>
+          )}
 
           <div className="flex items-end gap-2 bg-slate-50 rounded-xl p-1.5 border border-slate-200 focus-within:border-[#0B2545] transition-colors shadow-inner">
             <div className="p-2 text-slate-400 shrink-0 mb-0.5">
@@ -1263,7 +1360,7 @@ export default function Agent() {
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder={tab === 'backtest' && searchParams.get('bt_step') === '1' ? "Type a ticker (e.g. AAPL)..." : "Ask a master what they are buying..."}
+                placeholder={tab === 'backtest' && searchParams.get('bt_step') === '1' ? "Ticker (601899 or AAPL)..." : "Ask a master what they are buying..."}
                 className="flex-1 min-w-0 w-full max-h-[72px] min-h-[36px] bg-transparent resize-none text-[13px] font-medium text-[#0B2545] p-2 pl-0 focus:outline-none placeholder:text-slate-400"
                 rows={1}
               />
@@ -1308,16 +1405,16 @@ export default function Agent() {
                     <div className="text-[13px] font-bold text-[#0B2545]">{task.strategy}</div>
                     <div className="text-[9px] bg-emerald-50 border border-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold uppercase">Saved</div>
                   </div>
-                  <div className="text-[11px] text-slate-500">Target: <span className="font-bold text-[#0B2545] uppercase">{task.ticker}</span></div>
+                  <div className="text-[11px] text-slate-500">Target: <span className="font-bold text-[#0B2545] uppercase">{task.ticker}</span> · {BACKTEST_PERIODS.find(period => period.months === (task.result.months || 36))?.label}</div>
                   <div className="grid grid-cols-2 gap-2 mt-2 text-[10px] text-slate-500">
-                    <span>Win rate <b className="text-emerald-700">{task.stats.winRate}</b></span>
-                    <span>Return <b className="text-emerald-700">{task.stats.return}</b></span>
+                    <span>Win rate <b className="text-emerald-700">{task.result.stats.win_rate_pct === null ? '—' : `${task.result.stats.win_rate_pct}%`}</b></span>
+                    <span>Return <b className="text-emerald-700">{task.result.stats.return_pct}%</b></span>
                   </div>
                 </div>
               ))}
-              {searchParams.get('bt_step') === '3' && (
+              {searchParams.get('bt_step') === '3' && backtestResult && (
                 <div 
-                  onClick={() => setSearchParams({ tab: 'backtest', bt_step: '3', strategy: searchParams.get('strategy') || 'sma', ticker: searchParams.get('ticker') || 'AAPL', task_detail: '1' })}
+                  onClick={() => setSearchParams({ tab: 'backtest', bt_step: '3', strategy: searchParams.get('strategy') || 'sma', ticker: searchParams.get('ticker') || '', months: String(backtestMonths), task_detail: '1' })}
                   className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm active:scale-[0.99] transition-transform cursor-pointer relative overflow-hidden"
                 >
                   <div className="absolute left-0 top-0 bottom-0 w-1 bg-emerald-500"></div>
@@ -1329,15 +1426,6 @@ export default function Agent() {
                   <div className="text-[10px] text-slate-400 font-mono">Run at {new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
                 </div>
               )}
-              {/* Dummy old tasks */}
-              <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-sm opacity-60">
-                <div className="flex justify-between items-center mb-2">
-                  <div className="text-[14px] font-bold text-[#0B2545]">RSI Bounce</div>
-                  <div className="text-[10px] bg-slate-100 text-slate-500 border border-slate-200 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">Completed</div>
-                </div>
-                <div className="text-[12px] text-slate-500 font-medium mb-1">Target: <span className="font-bold text-[#0B2545] uppercase">BTC</span></div>
-                <div className="text-[10px] text-slate-400 font-mono">Yesterday</div>
-              </div>
             </div>
           </motion.div>
         )}

@@ -108,7 +108,7 @@ class EastmoneySearchTests(unittest.TestCase):
         yahoo_history.return_value = {"bars": [{"date": "2026-10-16", "close": 12.0}]}
         with patch("app.market_data.run_in_threadpool", new=_run_in_threadpool_inline):
             asyncio.run(market_data.fetch_daily_history("02259", "HK", "2026-10-10", "2026-10-18"))
-        yahoo_history.assert_called_once_with("02259.HK", "2026-10-10", "2026-10-18")
+        yahoo_history.assert_called_once_with("2259.HK", "2026-10-10", "2026-10-18")
 
 
 class TradeImportDuplicateTests(unittest.TestCase):
@@ -164,7 +164,7 @@ class TradeImportDuplicateTests(unittest.TestCase):
 
     @patch("app.today.create_trade")
     @patch("app.today.list_trades")
-    def test_same_import_request_is_idempotent_and_source_cannot_be_reused(self, list_trades, create_trade):
+    def test_same_import_request_is_idempotent_and_identical_source_is_skipped(self, list_trades, create_trade):
         list_trades.return_value = []
         create_trade.side_effect = lambda trade: trade
         source_hash = "b" * 64
@@ -179,11 +179,16 @@ class TradeImportDuplicateTests(unittest.TestCase):
                 patch.object(storage, "DATABASE_PATH", Path(temporary_directory) / "trade-import.sqlite3"):
             first = today.import_trades(first_request)
             replay = today.import_trades(first_request)
-            with self.assertRaisesRegex(Exception, "already imported"):
-                today.import_trades(second_request)
+            skipped = today.import_trades(second_request)
+            changed_request = self.request("skip", price=21)
+            changed_request.idempotency_key = "trade-import-example-3"
+            changed_request.source_hashes = [source_hash]
+            with self.assertRaisesRegex(Exception, "imported before"):
+                today.import_trades(changed_request)
 
         self.assertEqual(first["trades"], replay["trades"])
         self.assertTrue(replay["idempotent_replay"])
+        self.assertEqual(skipped["skipped_count"], 1)
         create_trade.assert_called_once()
 
 

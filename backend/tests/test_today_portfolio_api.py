@@ -58,14 +58,15 @@ class PortfolioApiPersistenceTests(unittest.TestCase):
                     with today.database() as connection:
                         self.assertEqual(connection.execute("SELECT COUNT(*) FROM today_portfolio_daily_states").fetchone()[0], 0)
                     second = asyncio.run(today.get_portfolio_pnl(date(2026, 10, 14), date(2026, 10, 15)))
-                    self.assertEqual(second["days"][0]["pnl_by_currency"]["CNY"], 300)
+                    # A dated trade ledger supersedes the legacy account snapshot.
+                    self.assertEqual(second["days"][0]["pnl_by_currency"]["CNY"], 0)
                     self.assertFalse(second["cache_hit"])
-                    self.assertEqual(len(history_calls), calls_after_first_calculation * 2)
+                    self.assertEqual(len(history_calls), calls_after_first_calculation + 1)
                     with today.database() as connection:
                         second_fingerprint = connection.execute("SELECT input_fingerprint FROM today_portfolio_daily_states WHERE state_date = '2026-10-14'").fetchone()[0]
                         self.assertNotEqual(first_fingerprint, second_fingerprint)
                         saved_state = json.loads(connection.execute("SELECT payload FROM today_portfolio_daily_states WHERE state_date = '2026-10-14'").fetchone()[0])
-                        self.assertEqual(saved_state["daily_state"]["positions"][1]["quantity"], 110)
+                        self.assertEqual(saved_state["daily_state"]["positions"][0]["quantity"], 10)
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ from .news_data import fetch_market_news
 from .today import get_agent_daily_context, router as today_router
 from .tavily_mcp import search_market_news
 from .stocks import router as stocks_router
+from .backtest import router as backtest_router
 from .storage import (
     create_asset_note,
     delete_asset_note,
@@ -86,6 +87,7 @@ app.add_middleware(
 
 app.include_router(today_router)
 app.include_router(stocks_router)
+app.include_router(backtest_router)
 
 MAX_HISTORY_MESSAGES = 12
 logger = logging.getLogger(__name__)
