@@ -182,7 +182,8 @@ class TradeImportRequest(BaseModel):
 
 
 class OcrImportPreview(BaseModel):
-    trades: list[ImportedTrade]
+    # OCR candidates may be incomplete; the user corrects them before import.
+    trades: list[dict[str, Any]]
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -1920,7 +1921,45 @@ Translate Chinese 买入 to Buy and 卖出 to Sell. Write every warning in conci
             response_format={"type": "json_object"},
             max_tokens=1600,
         )
-        return OcrImportPreview.model_validate_json(completion.choices[0].message.content or "")
+        payload = json.loads(completion.choices[0].message.content or "")
+        if not isinstance(payload, dict) or not isinstance(payload.get("trades"), list):
+            raise ValueError("OCR response has no trade list")
+        warnings = [str(item) for item in payload.get("warnings", []) if isinstance(item, str)] if isinstance(payload.get("warnings", []), list) else []
+        trades: list[dict[str, Any]] = []
+        for index, candidate in enumerate(payload["trades"], start=1):
+            if not isinstance(candidate, dict):
+                warnings.append(f"Row {index} could not be read as a trade. Enter it manually if needed.")
+                continue
+            side = str(candidate.get("type") or "").strip().lower()
+            if side in {"buy", "买入", "买"}:
+                side = "Buy"
+            elif side in {"sell", "卖出", "卖"}:
+                side = "Sell"
+            else:
+                side = ""
+            row: dict[str, Any] = {key: candidate.get(key) for key in ("time", "symbol", "code", "market", "asset_class", "currency") if candidate.get(key) is not None}
+            row["type"] = side
+            for key in ("price", "qty", "amount", "fee"):
+                value = candidate.get(key)
+                if isinstance(value, str):
+                    value = value.strip().replace(",", "").replace("，", "").replace("¥", "").replace("￥", "").replace("$", "")
+                try:
+                    row[key] = float(value) if value not in (None, "") else None
+                except (TypeError, ValueError):
+                    row[key] = None
+            for key, model in (("motive", ImportedMotive), ("plan", ImportedPlan)):
+                if isinstance(candidate.get(key), dict):
+                    try:
+                        row[key] = model.model_validate(candidate[key]).model_dump(exclude_none=True)
+                    except ValueError:
+                        warnings.append(f"Row {index} has an unreadable {key}; that optional field was omitted.")
+            missing = [label for key, label in (("type", "side"), ("time", "date"), ("symbol", "security"), ("price", "price"), ("qty", "quantity")) if not row.get(key)]
+            if missing:
+                warnings.append(f"Row {index} needs review: {', '.join(missing)}. Complete the fields before saving.")
+            trades.append(row)
+        if not trades and not warnings:
+            warnings.append("No completed trade rows were found. Try another screenshot or enter the trades manually.")
+        return OcrImportPreview(trades=trades, warnings=warnings)
     except OpenAIError as exc:
         provider_status = getattr(exc, "status_code", None)
         provider_code = getattr(exc, "code", None)
@@ -1930,8 +1969,8 @@ Translate Chinese 买入 to Buy and 卖出 to Sell. Write every warning in conci
             detail = "Screenshot recognition is rate-limited right now. Try again later or upload the statement as CSV/Excel instead."
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail) from exc
     except ValueError as exc:
-        logger.warning("Trade screenshot OCR returned data that failed validation (type=%s).", type(exc).__name__)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="The screenshot was read, but its trade rows could not be validated. Try a clearer crop or upload the statement as CSV/Excel instead.") from exc
+        logger.warning("Trade screenshot OCR returned an unusable response (type=%s).", type(exc).__name__)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Screenshot recognition did not return a usable trade list. Try again or enter the trades manually.") from exc
     finally:
         await client.close()
 

@@ -1,18 +1,26 @@
 import React, { useRef, useState } from 'react';
-import { FileSpreadsheet, Image, Loader2, Upload, X } from 'lucide-react';
+import { FileSpreadsheet, Image, Loader2, Plus, Trash2, Upload, X } from 'lucide-react';
 import { apiRequest } from '../lib/api';
 import { type ImportedTradeDraft, parseTradeSpreadsheet } from '../lib/trade-import';
 import { currentLocalDate, hasTradeDate, toStoredTradeTime, tradeDateTimeFields } from '../lib/trade-time';
 import { defaultCurrencyForMarket, inferMarketCurrency, normalizeMarketCode, type InstrumentSearchResult } from '../lib/instruments';
 import { newIdempotencyKey, sha256File } from '../lib/import-dedupe';
+import EnglishDateInput from './EnglishDateInput';
 
 type ImportResult = ImportedTradeDraft & { id: string };
 type DuplicateMatch = { row_index: number; symbol: string; trade_date: string | null; existing_id?: string; duplicate_of_row?: number; source: 'ledger' | 'upload' };
 type DuplicateMode = 'skip' | 'replace' | 'allow';
+type EditableTradeDraft = Omit<ImportedTradeDraft, 'type'> & { type: 'Buy' | 'Sell' | '' };
+type OcrTradeCandidate = Partial<Record<keyof ImportedTradeDraft, unknown>>;
+
+const numberOrZero = (value: unknown): number => {
+  const parsed = Number(String(value ?? '').replace(/[,，¥￥$\s]/g, ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+};
 
 export default function TradeImportDrawer({ isOpen, onClose, onImported, embedded = false, defaultTradeDate, asset, requireTradeDates = false }: { isOpen: boolean; onClose: () => void; onImported: (items: ImportResult[]) => void; embedded?: boolean; defaultTradeDate?: string; asset?: InstrumentSearchResult; requireTradeDates?: boolean }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [rows, setRows] = useState<ImportedTradeDraft[]>([]);
+  const [rows, setRows] = useState<EditableTradeDraft[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -37,6 +45,16 @@ export default function TradeImportDrawer({ isOpen, onClose, onImported, embedde
   const reset = () => { setRows([]); setWarnings([]); setError(null); setNotice(null); setDuplicateMatches(null); setDuplicateSourceSeen(false); setSourceHashes([]); setIdempotencyKey(newIdempotencyKey('trades')); setLoading(false); setSaving(false); };
   const close = () => { reset(); onClose(); };
 
+  const addManualRow = () => {
+    setRows(current => [...current, {
+      time: '', type: '', symbol: asset?.name || '', code: asset?.code || undefined,
+      market: asset?.market || 'GLOBAL', asset_class: asset?.asset_class || 'Stock',
+      currency: asset?.currency || '', price: 0, qty: 0,
+    }]);
+    setError(null); setNotice(null); setDuplicateMatches(null); setSourceHashes([]);
+    setIdempotencyKey(newIdempotencyKey('trades'));
+  };
+
   const selectFile = async (file?: File) => {
     if (!file) return;
     setLoading(true); setError(null); setNotice(null); setDuplicateMatches(null); setDuplicateSourceSeen(false); setRows([]); setWarnings([]);
@@ -46,11 +64,22 @@ export default function TradeImportDrawer({ isOpen, onClose, onImported, embedde
       setIdempotencyKey(newIdempotencyKey('trades'));
       if (file.type.startsWith('image/')) {
         const body = new FormData(); body.append('image', file);
-        const preview = await apiRequest<{ trades: ImportedTradeDraft[]; warnings: string[] }>('/api/today/import/ocr', { method: 'POST', body });
+        const preview = await apiRequest<{ trades: OcrTradeCandidate[]; warnings: string[] }>('/api/today/import/ocr', { method: 'POST', body });
         setRows(preview.trades.map(trade => {
-          const inferred = inferMarketCurrency(trade.code || trade.symbol);
-          const market = normalizeMarketCode(trade.market, trade.code || trade.symbol);
-          return { ...trade, market, currency: trade.currency || defaultCurrencyForMarket(market) || inferred.currency };
+          const symbol = String(trade.symbol || asset?.name || '').trim();
+          const code = String(trade.code || asset?.code || '').trim();
+          const inferred = inferMarketCurrency(code || symbol);
+          const market = asset?.market || normalizeMarketCode(String(trade.market || ''), code || symbol);
+          return {
+            time: String(trade.time || ''), type: trade.type === 'Buy' || trade.type === 'Sell' ? trade.type : '',
+            symbol, code: code || undefined, market, asset_class: asset?.asset_class || String(trade.asset_class || 'Stock'),
+            currency: asset?.currency || String(trade.currency || defaultCurrencyForMarket(market) || inferred.currency),
+            price: numberOrZero(trade.price), qty: numberOrZero(trade.qty),
+            amount: trade.amount == null ? undefined : numberOrZero(trade.amount),
+            fee: trade.fee == null ? undefined : numberOrZero(trade.fee),
+            motive: trade.motive as ImportedTradeDraft['motive'],
+            plan: trade.plan as ImportedTradeDraft['plan'],
+          };
         })); setWarnings(preview.warnings);
       } else if (/\.(csv|xlsx|xls|txt)$/i.test(file.name)) {
         const preview = await parseTradeSpreadsheet(file);
@@ -83,6 +112,10 @@ export default function TradeImportDrawer({ isOpen, onClose, onImported, embedde
 
   const save = async () => {
     if (!rows.length) return;
+    if (rows.some(row => row.type !== 'Buy' && row.type !== 'Sell')) { setError('Select Buy or Sell for every trade.'); return; }
+    if (rowsForImport().some(row => !row.symbol.trim())) { setError('Enter a security for every trade.'); return; }
+    if (rows.some(row => !Number.isFinite(row.price) || row.price <= 0 || !Number.isFinite(row.qty) || row.qty <= 0)) { setError('Enter a positive price and quantity for every trade.'); return; }
+    if (rows.some(row => row.fee != null && (!Number.isFinite(row.fee) || row.fee < 0))) { setError('Fees cannot be negative.'); return; }
     if (rows.some(row => !hasTradeDate(row.time))) { setError('Enter a trade date for every row. Trade time is optional.'); return; }
     if (rows.some(row => !row.currency?.trim())) { setError('Set the original currency for every row before importing.'); return; }
     setSaving(true); setError(null); setNotice(null);
@@ -113,36 +146,39 @@ export default function TradeImportDrawer({ isOpen, onClose, onImported, embedde
 
   return <div className={embedded ? "p-3" : "pointer-events-auto fixed inset-0 z-[120] flex items-end justify-center bg-slate-900/40 p-0 sm:items-center sm:p-4"}>
     <div className={embedded ? "w-full" : "w-full max-w-lg rounded-t-2xl bg-white p-4 shadow-2xl sm:rounded-2xl"}>
-      <div className="mb-4 flex items-start justify-between"><div><h2 className="text-[16px] font-bold text-[#0B2545]">{asset ? `Import history · ${asset.name}` : 'Batch import'}</h2><p className="mt-1 text-[11px] text-slate-500">Upload a CSV, TXT, Excel file, or trade screenshot. Check each side, price, quantity, and date before saving.</p></div>{!embedded && <button onClick={close} className="p-1 text-slate-400"><X size={18} /></button>}</div>
+      <div className="mb-4 flex items-start justify-between"><div><h2 className="text-[16px] font-bold text-[#0B2545]">{asset ? `Import history · ${asset.name}` : 'Batch import'}</h2><p className="mt-1 text-[11px] text-slate-500">Upload a statement or screenshot, or enter trades manually. Check each side, price, quantity, and date before saving.</p></div>{!embedded && <button onClick={close} className="p-1 text-slate-400"><X size={18} /></button>}</div>
       {!rows.length && <button disabled={loading} onClick={() => inputRef.current?.click()} className="flex w-full flex-col items-center rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-slate-600 hover:border-[#EE6C4D]">
         {loading ? <Loader2 className="animate-spin text-[#EE6C4D]" /> : <Upload className="text-[#EE6C4D]" />}<span className="mt-2 text-[12px] font-bold">Choose a file</span><span className="mt-1 text-[10px]">CSV / TXT / XLSX / PNG / JPEG / WebP</span>
       </button>}
+      {!rows.length && <button disabled={loading} onClick={addManualRow} className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-[#0B2545]/20 bg-white py-2.5 text-[11px] font-bold text-[#0B2545] disabled:opacity-60"><Plus size={13} /> Enter trades manually</button>}
       <input ref={inputRef} type="file" className="hidden" accept=".csv,.txt,.xls,.xlsx,image/png,image/jpeg,image/webp" onChange={e => { void selectFile(e.target.files?.[0]); e.target.value = ''; }} />
       {error && <p className="mt-3 rounded-lg bg-rose-50 p-2 text-[11px] text-rose-700">{error}</p>}
       {notice && <p role="status" className="mt-3 rounded-lg bg-emerald-50 p-2 text-[11px] text-emerald-700">{notice}</p>}
-      {!asset && warnings.map(warning => <p key={warning} className="mt-2 rounded-lg bg-amber-50 p-2 text-[10px] text-amber-700">{warning}</p>)}
+      {!asset && warnings.map((warning, index) => <p key={`${index}-${warning}`} className="mt-2 rounded-lg bg-amber-50 p-2 text-[10px] text-amber-700">{warning}</p>)}
       {rows.length > 0 && <>
         <div className="mt-3 max-h-64 space-y-2 overflow-y-auto">
           {rows.map((row, index) => {
-            const timestamp = tradeDateTimeFields(row.time);
+            const timestamp = hasTradeDate(row.time) ? tradeDateTimeFields(row.time) : { date: '', time: '' };
             const updateTimestamp = (date: string, time = timestamp.time) => setRows(current => current.map((item, i) => i === index ? { ...item, time: toStoredTradeTime(date, time) } : item));
             return <div key={index} className="rounded-lg border border-slate-200 p-2">
+              <div className="mb-2 flex items-center justify-between"><span className="text-[9px] font-bold text-slate-400">Trade {index + 1}</span><button type="button" aria-label={`Remove trade ${index + 1}`} onClick={() => { setRows(current => current.filter((_, i) => i !== index)); setDuplicateMatches(null); setSourceHashes([]); }} className="text-slate-400 hover:text-rose-600"><Trash2 size={13} /></button></div>
               <div className="grid grid-cols-2 gap-2">
-                <select value={row.type} onChange={e => setRows(current => current.map((item, i) => i === index ? { ...item, type: e.target.value as 'Buy' | 'Sell' } : item))} className="rounded border border-slate-200 p-1 text-[11px]"><option>Buy</option><option>Sell</option></select>
+                <select aria-label={`Trade ${index + 1} side`} value={row.type} onChange={e => setRows(current => current.map((item, i) => i === index ? { ...item, type: e.target.value as 'Buy' | 'Sell' | '' } : item))} className="rounded border border-slate-200 p-1 text-[11px]"><option value="">Select side</option><option>Buy</option><option>Sell</option></select>
                 {asset ? <div className="flex items-center rounded border border-slate-200 bg-slate-50 px-2 text-[10px] font-semibold text-[#0B2545]">{asset.name} · {asset.code || asset.market}</div> : <input value={row.symbol} onChange={e => setRows(current => current.map((item, i) => i === index ? { ...item, symbol: e.target.value } : item))} className="rounded border border-slate-200 p-1 text-[11px]" placeholder="Symbol" />}
-                <input type="number" value={row.price} onChange={e => setRows(current => current.map((item, i) => i === index ? { ...item, price: Number(e.target.value) } : item))} className="rounded border border-slate-200 p-1 text-[11px]" placeholder="Price" />
-                <input type="number" value={row.qty} onChange={e => setRows(current => current.map((item, i) => i === index ? { ...item, qty: Number(e.target.value) } : item))} className="rounded border border-slate-200 p-1 text-[11px]" placeholder="Quantity" />
+                <input aria-label={`Trade ${index + 1} price`} type="number" min="0" step="any" value={row.price || ''} onChange={e => setRows(current => current.map((item, i) => i === index ? { ...item, price: Number(e.target.value) } : item))} className="rounded border border-slate-200 p-1 text-[11px]" placeholder="Price" />
+                <input aria-label={`Trade ${index + 1} quantity`} type="number" min="0" step="any" value={row.qty || ''} onChange={e => setRows(current => current.map((item, i) => i === index ? { ...item, qty: Number(e.target.value) } : item))} className="rounded border border-slate-200 p-1 text-[11px]" placeholder="Quantity" />
                 <input aria-label="Fee (optional)" type="number" min="0" step="any" value={row.fee ?? ''} onChange={e => setRows(current => current.map((item, i) => i === index ? { ...item, fee: e.target.value === '' ? undefined : Number(e.target.value) } : item))} className="rounded border border-slate-200 p-1 text-[11px]" placeholder="Fee (optional)" />
                 {!asset && <select aria-label="Market" value={row.market || 'GLOBAL'} onChange={e => setRows(current => current.map((item, i) => i === index ? { ...item, market: e.target.value } : item))} className="rounded border border-slate-200 p-1 text-[11px]"><option value="CN">Mainland China</option><option value="HK">Hong Kong</option><option value="US">United States</option><option value="CRYPTO">Crypto</option><option value="GLOBAL">Other / Global</option></select>}
                 {!asset && <input aria-label="Original currency" value={row.currency || ''} maxLength={8} onChange={e => setRows(current => current.map((item, i) => i === index ? { ...item, currency: e.target.value.toUpperCase() } : item))} className="rounded border border-slate-200 p-1 font-mono text-[11px] uppercase" placeholder="Currency (USD)" />}
               </div>
               <div className="mt-2 grid grid-cols-2 gap-2">
-                <label><span className="mb-1 block text-[9px] font-bold text-slate-400">Trade date (required)</span><input lang="en-US" type="date" required value={timestamp.date} onChange={e => updateTimestamp(e.target.value)} className="w-full rounded border border-slate-200 px-2 py-1.5 font-mono text-[10px] text-[#0B2545]" /></label>
+                <div><span className="mb-1 block text-[9px] font-bold text-slate-400">Trade date (required)</span><EnglishDateInput label={`Trade ${index + 1} date`} value={timestamp.date} onChange={date => updateTimestamp(date, date ? timestamp.time : '')} /></div>
                 <label><span className="mb-1 block text-[9px] font-bold text-slate-400">Trade time (optional)</span><input lang="en-US" type="time" value={timestamp.time} onChange={e => updateTimestamp(timestamp.date, e.target.value)} className="w-full rounded border border-slate-200 px-2 py-1.5 font-mono text-[10px] text-[#0B2545]" /></label>
               </div>
             </div>;
           })}
         </div>
+        <button type="button" onClick={addManualRow} className="mt-3 flex w-full items-center justify-center gap-1 rounded-lg border border-dashed border-slate-300 py-2 text-[10px] font-bold text-[#0B2545]"><Plus size={12} /> Add trade manually</button>
         {duplicateMatches?.length ? <div role="alert" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-2.5">
           <p className="text-[11px] font-bold text-amber-900">Possible duplicate upload detected</p>
           <p className="mt-1 text-[10px] leading-relaxed text-amber-800">{duplicateMatches.length} row(s) match existing trades by date, time, instrument, side, price, and quantity. Skip them or replace the execution fields; saved motive and plan remain intact.</p>
@@ -157,7 +193,7 @@ export default function TradeImportDrawer({ isOpen, onClose, onImported, embedde
             {!duplicateSourceSeen && <button disabled={saving} onClick={() => void resolveDuplicates('allow')} className="rounded-lg border border-slate-200 bg-white py-2 text-[10px] font-bold text-slate-600 disabled:opacity-60">Import all as new</button>}
             <button disabled={saving} onClick={() => { setDuplicateMatches(null); setError(null); }} className="rounded-lg border border-slate-200 bg-white py-2 text-[10px] font-bold text-slate-600 disabled:opacity-60">Cancel</button>
           </div>
-        </div> : <div className="mt-4 flex gap-2"><button onClick={() => inputRef.current?.click()} className="flex-1 rounded-lg border border-slate-200 py-2 text-[11px] font-bold text-slate-600">Choose another file</button><button disabled={saving} onClick={() => void save()} className="flex-1 rounded-lg bg-[#EE6C4D] py-2 text-[11px] font-bold text-white">{saving ? 'Checking…' : `Confirm ${rows.length} trades`}</button></div>}
+        </div> : <div className="mt-4 flex gap-2"><button onClick={() => inputRef.current?.click()} className="flex-1 rounded-lg border border-slate-200 py-2 text-[11px] font-bold text-slate-600">Choose a file</button><button disabled={saving} onClick={() => void save()} className="flex-1 rounded-lg bg-[#EE6C4D] py-2 text-[11px] font-bold text-white">{saving ? 'Checking…' : `Confirm ${rows.length} trades`}</button></div>}
       </>}
       <div className="mt-3 flex gap-3 text-[10px] text-slate-400"><span className="flex items-center gap-1"><FileSpreadsheet size={11}/>CSV / Excel</span><span className="flex items-center gap-1"><Image size={11}/>Screenshot</span></div>
     </div>

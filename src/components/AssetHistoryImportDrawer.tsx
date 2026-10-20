@@ -80,7 +80,7 @@ export default function AssetHistoryImportDrawer({ open, onClose }: { open: bool
     <div className="pointer-events-auto fixed inset-0 z-[119] flex items-end justify-center bg-slate-900/40 p-0 sm:items-center sm:p-4">
       <section className="max-h-[calc(100dvh-1rem)] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-white p-4 shadow-2xl sm:rounded-2xl">
         <header className="mb-4 flex items-start justify-between gap-3">
-          <div><h2 className="text-[16px] font-bold text-[#0B2545]">Import asset history</h2><p className="mt-1 text-[11px] leading-relaxed text-slate-500">Select one security, then upload its transaction history. The imported trades are saved to your ledger and used to rebuild positions and P&amp;L.</p></div>
+          <div><h2 className="text-[16px] font-bold text-[#0B2545]">Import asset history</h2><p className="mt-1 text-[11px] leading-relaxed text-slate-500">Select one security, then upload or manually enter its transaction history. Confirmed trades are saved to your ledger and used to rebuild positions and P&amp;L.</p></div>
           <button onClick={onClose} aria-label="Close" className="shrink-0 rounded-full bg-slate-100 p-1.5 text-slate-500"><X size={15} /></button>
         </header>
 
@@ -104,7 +104,7 @@ export default function AssetHistoryImportDrawer({ open, onClose }: { open: bool
         </div> : <>
           <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-3">
             <div className="flex items-center gap-2"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-emerald-700"><Check size={13} /></span><div className="min-w-0"><div className="truncate text-[12px] font-bold text-[#0B2545]">{selected.name}</div><div className="font-mono text-[9px] text-slate-500">{selected.code || 'No ticker'} · {selected.market} · {selected.currency}</div></div></div>
-            <div className="mt-3 flex gap-2"><button onClick={() => { setImportOpen(false); setSelected(null); setQuery(''); setSearchOpen(true); }} className="flex-1 rounded-lg border border-slate-200 bg-white py-2 text-[10px] font-bold text-slate-600">Change security</button><button onClick={() => setImportOpen(value => !value)} className="flex-1 rounded-lg bg-[#0B2545] py-2 text-[10px] font-bold text-white">{importOpen ? 'Back to security' : <><Upload size={12} className="mr-1 inline" />Upload trade history</>}</button></div>
+            <div className="mt-3 flex gap-2"><button onClick={() => { setImportOpen(false); setSelected(null); setQuery(''); setSearchOpen(true); }} className="flex-1 rounded-lg border border-slate-200 bg-white py-2 text-[10px] font-bold text-slate-600">Change security</button><button onClick={() => setImportOpen(value => !value)} className="flex-1 rounded-lg bg-[#0B2545] py-2 text-[10px] font-bold text-white">{importOpen ? 'Back to security' : <><Upload size={12} className="mr-1 inline" />Add trade history</>}</button></div>
           </div>
           {importOpen && <div className="mt-2 rounded-xl border border-slate-100 bg-white"><TradeImportDrawer isOpen onClose={() => setImportOpen(false)} onImported={handleImported} embedded asset={selected} requireTradeDates /></div>}
         </>}
