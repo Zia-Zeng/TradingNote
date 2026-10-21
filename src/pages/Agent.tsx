@@ -8,7 +8,8 @@ import {
   Settings, Play, ArrowLeft, CheckCircle2, Search, X, Loader2, MessageSquarePlus
 } from 'lucide-react';
 import { 
-  ComposedChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Scatter, ReferenceLine
+  ComposedChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Scatter, ReferenceLine,
+  PieChart, Pie, Cell, Tooltip
 } from 'recharts';
 import { motion, AnimatePresence } from 'framer-motion';
 import { readLocalResult, saveLocalResult } from '../lib/saved-results';
@@ -23,6 +24,7 @@ type ConversationSummary = {
 
 type ConversationHistory = {
   conversation_id: string;
+  title: string;
   messages: Array<{ role: 'user' | 'assistant'; content: string; created_at: string }>;
 };
 
@@ -41,6 +43,333 @@ interface Message {
   id: string;
   role: 'user' | 'agent';
   content: React.ReactNode;
+}
+
+type InsightsAsset = { symbol: string; code: string | null; market_value?: number | null; share_pct?: number | null; pnl?: number | null; return_pct?: number | null };
+type BehaviorInsights = {
+  conversation_id?: string;
+  summary: string;
+  key_evidence: { holding_period: string; trading_frequency: string; turnover: string };
+  profit_structure: { basis: string; commentary: string; charts: Array<{ currency: string; allocation: InsightsAsset[]; returns: InsightsAsset[] }> };
+  suggestion: string;
+  period_start: string;
+  period_end: string;
+  holdings_as_of: string | null;
+};
+
+const REVIEW_PRESET_QUESTION = 'Can you review my recent trades and point out any mistakes?';
+const INSIGHTS_PRESET_QUESTION = 'Tag me and analyze my recent trading style';
+const DRAFT_PRESET_QUESTION = 'Help me draft a solid investment plan based on my recent holdings.';
+const INSIGHTS_MESSAGE_PREFIX = 'BEHAVIOR_INSIGHTS_JSON:';
+
+function parseSavedInsights(content: string): BehaviorInsights | null {
+  if (!content.startsWith(INSIGHTS_MESSAGE_PREFIX)) return null;
+  try {
+    const data = JSON.parse(content.slice(INSIGHTS_MESSAGE_PREFIX.length)) as BehaviorInsights;
+    return typeof data.summary === 'string' && typeof data.suggestion === 'string'
+      && typeof data.key_evidence?.holding_period === 'string' && Array.isArray(data.profit_structure?.charts)
+      ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+const insightColor = (pnl: number | null | undefined) => pnl == null ? '#94a3b8' : pnl > 0 ? '#10b981' : pnl < 0 ? '#ef4444' : '#94a3b8';
+const insightAllocationColor = (index: number, total: number) => `hsl(211, 65%, ${(24 + index * 45 / Math.max(total - 1, 1)).toFixed(1)}%)`;
+
+function InsightsResult({ data }: { data: BehaviorInsights }) {
+  const evidence = [
+    ['Holding Period', data.key_evidence.holding_period],
+    ['Trading Frequency', data.key_evidence.trading_frequency],
+    ['Turnover', data.key_evidence.turnover],
+  ];
+  return <div className="w-[280px] max-w-full space-y-3">
+    <p className="text-[12px] leading-relaxed text-[#0B2545]">Based on your account and trading records from {data.period_start} to {data.period_end}:</p>
+    <div className="bg-white/90 backdrop-blur-md p-3 rounded-xl border border-white shadow-[0_4px_12px_rgba(11,37,69,0.04)] relative overflow-hidden">
+      <div className="absolute top-0 left-0 w-1 h-full bg-[#EE6C4D]" />
+      <div className="flex items-center gap-1.5 mb-1.5"><Sparkles size={12} className="text-[#EE6C4D]" /><span className="text-[10px] font-bold text-[#EE6C4D] uppercase tracking-wider">Summary</span></div>
+      <p className="text-[11px] text-slate-700 font-medium leading-relaxed">{data.summary}</p>
+    </div>
+    <div className="bg-slate-50/80 backdrop-blur-md rounded-xl border border-slate-100 shadow-[0_4px_12px_rgba(11,37,69,0.02)] overflow-hidden">
+      <div className="p-2.5 border-b border-slate-100 bg-white/50"><div className="flex items-center gap-1.5"><BookOpen size={12} className="text-[#0B2545]" /><span className="text-[10px] font-bold text-[#0B2545] uppercase tracking-wider">Key Evidence</span></div></div>
+      <div className="p-2.5"><table className="w-full text-left text-[10px]"><thead><tr className="text-slate-400"><th className="font-medium pb-2 uppercase tracking-wide">Dimension</th><th className="font-medium pb-2 uppercase tracking-wide">Ledger Perf.</th></tr></thead><tbody className="text-slate-600 align-top">{evidence.map(([label, value]) => <tr key={label} className="border-t border-slate-100/60"><td className="py-1.5 font-bold text-[#0B2545] w-[45%] pr-2">{label}</td><td className="py-1.5">{value}</td></tr>)}</tbody></table></div>
+    </div>
+    <div className="bg-white/80 backdrop-blur-md p-3 rounded-xl border border-white shadow-[0_4px_12px_rgba(11,37,69,0.04)]">
+      <div className="flex items-center gap-1.5 mb-3"><BarChart2 size={12} className="text-[#0B2545]" /><span className="text-[10px] font-bold text-[#0B2545] uppercase tracking-wider">Profit Structure</span></div>
+      {data.profit_structure.charts.length === 0 && <p className="text-[10px] text-slate-500">No current holdings snapshot is available for charts.</p>}
+      {data.profit_structure.charts.map(chart => {
+        const returns = chart.returns.filter(item => item.pnl != null);
+        const pieData = chart.allocation.filter(item => item.market_value != null && item.market_value > 0);
+        const maxAbsolutePnl = Math.max(0, ...returns.map(item => Math.abs(item.pnl!)));
+        return <div key={chart.currency} className="mb-3">
+          <p className="text-[10px] font-bold text-[#0B2545] mb-1">{chart.currency} holdings{data.holdings_as_of ? ` · ${data.holdings_as_of}` : ''}</p>
+          <div className="grid grid-cols-2 gap-2 items-start">
+            <div className="min-w-0">
+              <p className="text-[9px] font-semibold text-slate-500">Allocation</p>
+              {pieData.length > 0 ? <>
+                <div className="h-24"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={pieData} dataKey="market_value" nameKey="symbol" cx="50%" cy="50%" innerRadius={17} outerRadius={40} stroke="#fff" strokeWidth={1}>{pieData.map((item, index) => <Cell key={item.code || item.symbol} fill={insightAllocationColor(index, pieData.length)} />)}</Pie><Tooltip formatter={(value: number) => `${chart.currency} ${value.toLocaleString()}`} /></PieChart></ResponsiveContainer></div>
+                <div className="space-y-1">{chart.allocation.map(item => {
+                  const index = pieData.findIndex(value => value.code === item.code && value.symbol === item.symbol);
+                  return <div key={item.code || item.symbol} className="flex items-start gap-1 text-[9px] text-slate-600"><span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: index >= 0 ? insightAllocationColor(index, pieData.length) : '#94a3b8' }} /><span className="min-w-0 flex-1 break-words">{item.symbol}</span><span className="font-mono shrink-0">{item.share_pct == null ? '—' : `${item.share_pct.toFixed(1)}%`}</span></div>;
+                })}</div>
+              </> : <p className="mt-2 text-[9px] text-slate-500">Market values are unavailable.</p>}
+            </div>
+            <div className="min-w-0">
+              <p className="text-[9px] font-semibold text-slate-500">Holding P/L</p>
+              {returns.length > 0 ? <div className="mt-2 space-y-2.5">{returns.map(item => <div key={item.code || item.symbol} className="min-w-0">
+                <p className="truncate text-[9px] font-medium text-[#0B2545]" title={item.symbol}>{item.symbol}</p>
+                <div className="mt-1 h-2.5 w-full overflow-hidden rounded-r bg-slate-100" role="img" aria-label={`${item.symbol}: ${item.pnl! >= 0 ? 'gain' : 'loss'} ${chart.currency} ${Math.abs(item.pnl!).toLocaleString()}`}><div className="h-full rounded-r" style={{ width: maxAbsolutePnl > 0 ? `${Math.abs(item.pnl!) / maxAbsolutePnl * 100}%` : '0%', backgroundColor: insightColor(item.pnl) }} /></div>
+                <p className="mt-0.5 text-[9px] font-mono leading-tight" style={{ color: insightColor(item.pnl) }}>{item.pnl! >= 0 ? '+' : ''}{chart.currency} {item.pnl!.toLocaleString()}<br />{item.return_pct == null ? 'Return unavailable' : `${item.return_pct >= 0 ? '+' : ''}${item.return_pct.toFixed(1)}%`}</p>
+              </div>)}</div> : <p className="mt-2 text-[9px] text-slate-500">Average cost or market value is unavailable.</p>}
+            </div>
+          </div>
+        </div>;
+      })}
+      <div className="bg-[#0B2545]/5 p-2 rounded-lg border border-[#0B2545]/10"><span className="text-[10px] font-bold text-[#0B2545] block mb-0.5">Profit Summary:</span><p className="text-[10px] text-slate-600 leading-relaxed font-medium">{data.profit_structure.commentary}</p><p className="text-[9px] text-slate-500 mt-1">Holding P/L{data.holdings_as_of ? ` as of ${data.holdings_as_of}` : ''} versus average cost; allocation excludes cash.</p></div>
+    </div>
+    <div className="bg-[#0B2545] p-3 rounded-xl border border-[#0B2545] shadow-lg relative overflow-hidden"><div className="absolute -right-6 -top-6 w-24 h-24 bg-white/5 rounded-full blur-2xl pointer-events-none" /><div className="flex items-center gap-1.5 mb-1.5 relative z-10"><User size={12} className="text-[#EE6C4D]" /><span className="text-[10px] font-bold text-white uppercase tracking-wider">Suggestion</span></div><p className="text-[11px] text-slate-300 leading-relaxed font-medium relative z-10">{data.suggestion}</p></div>
+  </div>;
+}
+
+function AgentInline({ text }: { text: string }) {
+  return <>{text.split(/(\*\*[^*]+\*\*|\[[^\]]+\]\(https?:\/\/[^\s)]+\))/g).map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={index} className="font-bold text-[#0B2545]">{part.slice(2, -2)}</strong>;
+    }
+    const link = part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)$/);
+    return link
+      ? <a key={index} href={link[2]} target="_blank" rel="noopener noreferrer" className="font-semibold text-[#EE6C4D] underline break-all">{link[1]}</a>
+      : part;
+  })}</>;
+}
+
+const tableCells = (line: string) => line.trim().replace(/^\||\|$/g, '').split('|').map(cell => cell.trim());
+const tableRow = (line: string) => line.trim().startsWith('|') && line.trim().endsWith('|');
+const tableDivider = (line: string) => tableRow(line) && tableCells(line).every(cell => /^:?-{3,}:?$/.test(cell));
+
+function splitNotes(text: string): string[] {
+  const notes: string[] = [];
+  let remaining = text.trim();
+  while (remaining.length > 140) {
+    let boundary = remaining.lastIndexOf('\n', 140);
+    if (boundary < 60) boundary = remaining.lastIndexOf(' ', 140);
+    if (boundary < 60) boundary = 140;
+    notes.push(remaining.slice(0, boundary).trim());
+    remaining = remaining.slice(boundary).trim();
+  }
+  if (remaining) notes.push(remaining);
+  return notes;
+}
+
+function suggestionNotes(text: string): string[] {
+  const heading = /^#{1,3}\s+Suggestion\s*$/im.exec(text);
+  if (!heading) return [];
+  const following = text.slice(heading.index + heading[0].length);
+  const nextHeading = /^#{1,3}\s+/m.exec(following);
+  const section = (nextHeading ? following.slice(0, nextHeading.index) : following).trim();
+  if (!section) return [];
+
+  const lines = section.split(/\r?\n/).map(line => line.trim());
+  const headerIndex = lines.findIndex((line, index) => tableRow(line) && index + 1 < lines.length && tableDivider(lines[index + 1]));
+  if (headerIndex < 0) return splitNotes(`Review Trades · Suggestions\n${section.replace(/\*\*/g, '')}`);
+
+  const headers = tableCells(lines[headerIndex]).map(header => header.toLowerCase());
+  const scenarioIndex = headers.findIndex(header => header.includes('scenario'));
+  const signalIndex = headers.findIndex(header => header.startsWith('signal'));
+  const planIndex = headers.findIndex(header => header.includes('response plan'));
+  const entries = lines.slice(headerIndex + 2).filter(tableRow).map(line => {
+    const row = tableCells(line);
+    const title = `Review Trades · ${row[scenarioIndex] || 'Scenario'}`;
+    const signal = `Signal: ${row[signalIndex] || 'Not specified'}`;
+    const plan = `Response plan: ${row[planIndex] || 'Not specified'}`;
+    const combined = [title, signal, plan].join('\n');
+    return combined.length <= 140 ? [combined] : [
+      ...splitNotes(`${title}\n${signal}`),
+      ...splitNotes(`${title}\n${plan}`),
+    ];
+  });
+  const introduction = lines.slice(0, headerIndex).filter(Boolean).join(' ').replace(/\*\*/g, '');
+  return [
+    ...(introduction ? splitNotes(`Review Trades · Suggestions\n${introduction}`) : []),
+    ...entries.flat(),
+  ];
+}
+
+const reviewAssetKey = (value: string) => value.normalize('NFKC').trim().toUpperCase()
+  .replace(/\.(SH|SZ|BJ)$/, '').replace(/[\s._-]+/g, '');
+
+function ReviewNotesButton({ notes, asset }: { notes: string[]; asset: string }) {
+  const navigate = useNavigate();
+  const [saving, setSaving] = useState(false);
+  const [savedRoute, setSavedRoute] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const addToNotes = async () => {
+    if (saving || savedRoute) return;
+    setSaving(true);
+    setError(null);
+    try {
+      if (notes.some(note => note.length > 140)) throw new Error('A suggestion exceeds the 140-character note limit.');
+      const trades = await apiRequest<Array<{ symbol: string; code?: string | null }>>('/api/trades');
+      const query = reviewAssetKey(asset);
+      const exact = trades.find(trade => [trade.symbol, trade.code].some(value => value && reviewAssetKey(value) === query));
+      const partial = trades.find(trade => [trade.symbol, trade.code].some(value => value && query.length >= 3 && (reviewAssetKey(value).includes(query) || query.includes(reviewAssetKey(value)))));
+      const trade = exact || partial;
+      if (!trade) throw new Error('No saved trades match this asset. Check the asset name or code.');
+      const code = trade.code?.trim();
+      const assetKey = code ? `code:${code}` : `symbol:${trade.symbol.trim().toUpperCase()}`;
+      const queryString = new URLSearchParams({ asset_key: assetKey });
+      const existing = await apiRequest<Array<{ content: string }>>(`/api/asset-notes?${queryString}`);
+      const saved = new Set(existing.map(item => item.content));
+      for (const note of notes) {
+        if (saved.has(note)) continue;
+        await apiRequest('/api/asset-notes', {
+          method: 'POST',
+          body: JSON.stringify({ asset_key: assetKey, content: note }),
+        });
+        saved.add(note);
+      }
+      setSavedRoute(code || trade.symbol.trim());
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not save the suggestion. Please retry.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mt-4 flex flex-col items-center gap-2 border-t border-slate-100 pt-3 text-center">
+      <button onClick={() => void addToNotes()} disabled={saving || Boolean(savedRoute)} className="rounded-lg bg-[#0B2545] px-4 py-2 text-[11px] font-bold text-white shadow-sm disabled:bg-emerald-50 disabled:text-emerald-700">
+        {saving ? 'Saving…' : savedRoute ? 'Added to My notes' : 'Add to my notes'}
+      </button>
+      {savedRoute && <button onClick={() => navigate(`/detail/${encodeURIComponent(savedRoute)}?scroll=notes-section`)} className="text-[10px] font-semibold text-[#EE6C4D] underline">View in Tracking</button>}
+      {error && <p role="alert" className="text-[10px] text-rose-600">{error}</p>}
+    </div>
+  );
+}
+
+function AgentMarkdown({ text, reviewAsset }: { text: string; reviewAsset?: string }) {
+  const lines = text.split(/\r?\n/);
+  const blocks: React.ReactNode[] = [];
+  const isReviewReply = Boolean(reviewAsset && /^#{1,3}\s+Overview\s*$/im.test(text));
+  let activeSection: { name: string; items: React.ReactNode[] } | null = null;
+  let index = 0;
+  let highlightConclusion = false;
+  let section = '';
+
+  const addBlock = (block: React.ReactNode) => {
+    if (activeSection) activeSection.items.push(block);
+    else blocks.push(block);
+  };
+  const finishSection = () => {
+    if (!activeSection) return;
+    const current = activeSection;
+    const conclusion = current.name === 'conclusion';
+    blocks.push(
+      <section key={`section-${blocks.length}`} className={cn(
+        'mb-3 rounded-xl border px-3 py-3 shadow-sm',
+        conclusion ? 'border-slate-100 border-l-4 border-l-[#EE6C4D]' : 'border-slate-200',
+      )}>
+        {current.items}
+      </section>
+    );
+    activeSection = null;
+  };
+
+  const cells = tableCells;
+  const isTableRow = tableRow;
+  const isTableDivider = tableDivider;
+
+  while (index < lines.length) {
+    const line = lines[index].trim();
+    if (!line) {
+      index += 1;
+      continue;
+    }
+
+    const heading = line.match(/^#{1,3}\s+(.+)$/);
+    if (heading) {
+      section = heading[1].trim().toLowerCase();
+      finishSection();
+      highlightConclusion = !isReviewReply && section === 'conclusion';
+      if (isReviewReply && ['conclusion', 'overview', 'detail', 'suggestion'].includes(section)) {
+        activeSection = { name: section, items: [] };
+        const icon = section === 'conclusion' ? <Sparkles size={15} />
+          : section === 'overview' ? <BarChart2 size={14} />
+            : section === 'detail' ? <FileText size={14} /> : <Target size={14} />;
+        addBlock(<h3 key={`h-${index}`} className={cn(
+          'mb-2 flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-[0.08em]',
+          section === 'conclusion' ? 'text-[#EE6C4D]' : 'text-[#0B2545]',
+        )}>{icon}{heading[1]}</h3>);
+      } else {
+        blocks.push(<h3 key={`h-${index}`} className="mt-3 mb-1 text-[12px] font-bold text-[#0B2545]">{heading[1]}</h3>);
+      }
+      index += 1;
+      continue;
+    }
+
+    if (isTableRow(line) && index + 1 < lines.length && isTableDivider(lines[index + 1])) {
+      const headers = cells(line);
+      const actionColumn = headers.findIndex(header => header.toLowerCase() === 'action');
+      const displayHeaders = headers.map(header => header.toLowerCase() === 'signal to watch' ? 'Signal' : header);
+      index += 2;
+      const rows: string[][] = [];
+      while (index < lines.length && isTableRow(lines[index].trim())) {
+        rows.push(cells(lines[index]));
+        index += 1;
+      }
+      addBlock(
+        <div key={`t-${index}`} className="my-2 overflow-x-auto rounded-lg border border-slate-200 bg-white">
+          <table className="w-full min-w-[320px] text-left text-[10px]">
+            <thead className="bg-slate-50 text-slate-600"><tr>{displayHeaders.map((header, cellIndex) => <th key={cellIndex} className="px-2 py-1.5 font-bold">{header}</th>)}</tr></thead>
+            <tbody className="divide-y divide-slate-100 text-slate-700">{rows.map((row, rowIndex) => {
+              const action = actionColumn >= 0 ? (row[actionColumn] || '').trim().toLowerCase() : '';
+              const actionColor = ['buy', 'b', '买入'].includes(action)
+                ? 'text-emerald-700'
+                : ['sell', 's', '卖出'].includes(action)
+                  ? 'text-rose-700'
+                  : 'text-slate-700';
+              return <tr key={rowIndex}>{headers.map((header, cellIndex) => {
+                const normalizedHeader = header.toLowerCase();
+                const color = normalizedHeader === 'action' || normalizedHeader.includes('price') || normalizedHeader.includes('amount') ? actionColor : 'text-slate-700';
+                return <td key={cellIndex} className={`px-2 py-1.5 align-top ${color}`}>{row[cellIndex] || '—'}</td>;
+              })}</tr>;
+            })}</tbody>
+          </table>
+        </div>
+      );
+      continue;
+    }
+
+    const paragraph: string[] = [];
+    while (index < lines.length && lines[index].trim() && !/^#{1,3}\s+/.test(lines[index].trim()) && !isTableRow(lines[index].trim())) {
+      paragraph.push(lines[index].trim());
+      index += 1;
+    }
+    const paragraphText = paragraph.join(' ');
+    const detailDate = section === 'detail' ? paragraphText.match(/^(?:[-*]\s*)?(?:\*\*)?(\d{4}-\d{2}-\d{2}):?(?:\*\*)?:?\s*(.*)$/) : null;
+    if (detailDate) {
+      addBlock(
+        <div key={`p-${index}`} className="mb-2.5 border-b border-slate-100 pb-2.5 last:border-b-0">
+          <div className="text-[11px] font-bold text-[#0B2545]">{detailDate[1]}:</div>
+          <p className="mt-1 text-[11px] leading-relaxed whitespace-pre-wrap"><AgentInline text={detailDate[2]} /></p>
+        </div>
+      );
+    } else if (highlightConclusion) {
+      addBlock(
+        <div key={`p-${index}`} className="my-2 rounded-lg border border-[#EE6C4D]/25 border-l-4 border-l-[#EE6C4D] bg-[#EE6C4D]/10 px-3 py-2.5 shadow-sm">
+          <p className="text-[11px] font-medium leading-relaxed text-[#0B2545]"><AgentInline text={paragraphText} /></p>
+        </div>
+      );
+      highlightConclusion = false;
+    } else {
+      addBlock(<p key={`p-${index}`} className={cn('mb-1.5 whitespace-pre-wrap', activeSection?.name === 'conclusion' ? 'text-[12px] leading-[1.65] text-slate-700' : 'text-[11px] leading-relaxed')}><AgentInline text={paragraphText} /></p>);
+    }
+  }
+  finishSection();
+
+  const notes = isReviewReply ? suggestionNotes(text) : [];
+  return <div className="w-[280px] max-w-full text-slate-700">{blocks}{notes.length > 0 && reviewAsset && <ReviewNotesButton notes={notes} asset={reviewAsset} />}</div>;
 }
 
 type BacktestResult = {
@@ -145,9 +474,9 @@ export default function Agent() {
   
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
+  const [insightsAttempt, setInsightsAttempt] = useState(0);
   const [savedTracking, setSavedTracking] = useState(false);
   const [savedPlan, setSavedPlan] = useState(false);
-  const [savedReview, setSavedReview] = useState(false);
   const [savedTask, setSavedTask] = useState(false);
   const [savedTasks, setSavedTasks] = useState<any[]>(readSavedBacktestTasks);
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
@@ -463,7 +792,7 @@ export default function Agent() {
         ]);
       } else if (action === 'draft') {
         const msgs: Message[] = [];
-        msgs.push({ id: 'd1_u', role: 'user', content: 'Help me draft a solid investment plan based on my recent holdings.' });
+        msgs.push({ id: 'd1_u', role: 'user', content: DRAFT_PRESET_QUESTION });
 
         if (!step) {
           msgs.push({ id: 'd1_a', role: 'agent', content: <Thinking /> });
@@ -615,256 +944,19 @@ export default function Agent() {
           setMessages(msgs);
         }
       } else if (action === 'review') {
-        const msgs: Message[] = [];
-        msgs.push({ id: 'r1_u', role: 'user', content: 'Can you review my recent trades and point out any mistakes?' });
-
-        if (!step) {
-          msgs.push({ id: 'r1_a', role: 'agent', content: <Thinking /> });
-          setMessages(msgs);
-          const t = setTimeout(() => setSearchParams({ action: 'review', step: '1', tab: 'chat' }, { replace: true }), 1500);
-          return () => clearTimeout(t);
-        }
-
-        const step1AgentActive = (
-          <div>
-            <p className="mb-2 text-[12px] leading-relaxed">Let's review your recent trades. <strong>Which asset</strong> would you like to analyze?</p>
-            <div className="flex flex-wrap gap-2">
-              <button onClick={() => setSearchParams({ action: 'review', step: '2_think', tab: 'chat' })} className="px-2.5 py-1.5 bg-[#EE6C4D]/10 text-[#EE6C4D] border border-[#EE6C4D]/20 rounded-lg text-[11px] font-bold active:bg-[#EE6C4D]/20 transition-colors shadow-sm">JEREH</button>
-              <button onClick={() => setSearchParams({ action: 'review', step: '2_think', tab: 'chat' })} className="px-2.5 py-1.5 bg-white text-slate-600 border border-slate-200 rounded-lg text-[11px] font-bold active:bg-slate-50 transition-colors shadow-sm">ZIJIN MINING</button>
-            </div>
-          </div>
-        );
-
-        const step1AgentDisabled = (
-          <div>
-            <p className="mb-2 text-[12px] leading-relaxed">Let's review your recent trades. <strong>Which asset</strong> would you like to analyze?</p>
-            <div className="flex flex-wrap gap-2 opacity-60 pointer-events-none">
-              <button className="px-2.5 py-1.5 bg-[#EE6C4D] text-white border border-[#EE6C4D] rounded-lg text-[11px] font-bold shadow-sm">JEREH</button>
-            </div>
-          </div>
-        );
-
-        if (step === '1') {
-          msgs.push({ id: 'r1_a', role: 'agent', content: step1AgentActive });
-          setMessages(msgs);
-          return;
-        }
-
-        msgs.push({ id: 'r1_a', role: 'agent', content: step1AgentDisabled });
-        msgs.push({ id: 'r2_u', role: 'user', content: 'JEREH' });
-
-        if (step === '2_think') {
-          msgs.push({ id: 'r2_a', role: 'agent', content: <Thinking /> });
-          setMessages(msgs);
-          const t = setTimeout(() => setSearchParams({ action: 'review', step: '2', tab: 'chat' }, { replace: true }), 2000);
-          return () => clearTimeout(t);
-        }
-
-        setSavedReview(Boolean(readLocalResult('tradingnote:review:2026-07-14:JEREH')));
-        const step2AgentActive = (
-          <div className="w-[250px] max-w-full">
-            <p className="mb-3 text-[12px] leading-relaxed">Here is the detailed review for <span className="text-[#0B2545] font-bold">JEREH</span>:</p>
-            
-            <div className="space-y-2.5">
-              <div className="bg-white/80 backdrop-blur-md p-3 rounded-xl border border-white shadow-[0_4px_12px_rgba(11,37,69,0.04)]">
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <Target size={12} className="text-[#0B2545]" />
-                  <span className="text-[10px] font-bold text-[#0B2545] uppercase tracking-wider">Evaluation</span>
-                </div>
-                <p className="text-[11px] text-slate-600 font-medium leading-relaxed">Failed to cut losses early. A classic case of holding onto a losing position due to emotional attachment.</p>
-              </div>
-              
-              <div className="bg-slate-50/80 backdrop-blur-md p-3 rounded-xl border border-slate-100 shadow-[0_4px_12px_rgba(11,37,69,0.02)]">
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <FileText size={12} className="text-[#0B2545]" />
-                  <span className="text-[10px] font-bold text-[#0B2545] uppercase tracking-wider">Summary</span>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-[10px]">
-                  <div><span className="text-slate-400">Entry:</span> <span className="font-mono font-bold text-[#0B2545] ml-1">155.0</span></div>
-                  <div><span className="text-slate-400">Exit:</span> <span className="font-mono font-bold text-[#0B2545] ml-1">140.0</span></div>
-                  <div><span className="text-slate-400">Plan SL:</span> <span className="font-mono font-bold text-rose-500 ml-1">145.0</span></div>
-                  <div><span className="text-slate-400">Loss:</span> <span className="font-mono font-bold text-rose-500 ml-1">-9.6%</span></div>
-                </div>
-              </div>
-
-              <div className="bg-rose-50/80 backdrop-blur-md p-3 rounded-xl border border-rose-100 shadow-[0_4px_12px_rgba(244,63,94,0.04)]">
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <AlertTriangle size={12} className="text-rose-500" />
-                  <span className="text-[10px] font-bold text-rose-700 uppercase tracking-wider">Psychology</span>
-                </div>
-                <p className="text-[11px] text-rose-700/80 font-medium leading-relaxed">FOMO entry without fundamental support. You hesitated when it broke the 145 level, hoping for a bounce.</p>
-              </div>
-
-              <div className="bg-[#0B2545] p-3 rounded-xl border border-[#0B2545] shadow-lg relative overflow-hidden mt-2">
-                <div className="absolute -right-6 -top-6 w-24 h-24 bg-white/5 rounded-full blur-2xl pointer-events-none"></div>
-                <div className="flex items-center gap-1.5 mb-2 relative z-10">
-                  <Sparkles size={12} className="text-[#EE6C4D]" />
-                  <span className="text-[10px] font-bold text-white uppercase tracking-wider">Suggestions</span>
-                </div>
-                <ul className="text-[11px] text-slate-300 leading-relaxed font-medium relative z-10 space-y-1.5 list-disc pl-3">
-                  <li><strong className="text-white">Price Zone:</strong> Avoid re-entry until it establishes a solid base above 142.</li>
-                  <li><strong className="text-white">Market State:</strong> Oil & gas sector is currently in a downtrend.</li>
-                  <li><strong className="text-white">Action:</strong> Focus on capital preservation. Use conditional orders to automate your stop-loss next time.</li>
-                </ul>
-              </div>
-            </div>
-            <button
-              onClick={() => {
-                saveLocalResult('tradingnote:review:2026-07-14:JEREH', { date: '2026-07-14', asset: 'JEREH', summary: 'The exit was right, but waiting below the ¥145 stop added about ¥500 in losses. Use conditional orders to preserve capital.', savedAt: new Date().toISOString() });
-                setSavedReview(true);
-              }}
-              className="w-full mt-3 bg-[#0B2545] text-white py-2 rounded-lg text-[11px] font-bold active:bg-[#134074]"
-            >{savedReview ? 'Review Saved to Trade' : 'Save Review to Trade'}</button>
-          </div>
-        );
-
-        if (step === '2') {
-          msgs.push({ id: 'r2_a', role: 'agent', content: step2AgentActive });
-          setMessages(msgs);
+        if (step !== 'followup') {
+          setMessages([
+            { id: 'r1_u', role: 'user', content: REVIEW_PRESET_QUESTION },
+            { id: 'r1_a', role: 'agent', content: <Thinking /> },
+          ]);
+          const timer = setTimeout(() => setMessages(previous => previous.map(message => message.id === 'r1_a'
+            ? { ...message, content: <p className="text-[12px] leading-relaxed">Let's review your recent trades. Which asset would you like to analyze?</p> }
+            : message)), 2000);
+          return () => clearTimeout(timer);
         }
       } else if (action === 'insights') {
-        const msgs: Message[] = [];
-        msgs.push({ id: 'i1_u', role: 'user', content: 'Tag me and analyze my recent trading style' });
-
-        if (!step) {
-          msgs.push({ id: 'i1_a', role: 'agent', content: <Thinking /> });
-          setMessages(msgs);
-          const t = setTimeout(() => setSearchParams({ action: 'insights', step: 'result', tab: 'chat' }, { replace: true }), 2500);
-          return () => clearTimeout(t);
-        }
-
-        const insightsResult = (
-          <div className="w-[280px] max-w-full space-y-3">
-            <p className="text-[12px] leading-relaxed text-[#0B2545]">
-              Based on your ledger records over the past 6 months, here is your behavior analysis:
-            </p>
-
-            {/* Summary */}
-            <div className="bg-white/90 backdrop-blur-md p-3 rounded-xl border border-white shadow-[0_4px_12px_rgba(11,37,69,0.04)] relative overflow-hidden">
-              <div className="absolute top-0 left-0 w-1 h-full bg-[#EE6C4D]"></div>
-              <div className="flex items-center gap-1.5 mb-1.5">
-                <Sparkles size={12} className="text-[#EE6C4D]" />
-                <span className="text-[10px] font-bold text-[#EE6C4D] uppercase tracking-wider">Summary</span>
-              </div>
-              <p className="text-[11px] text-slate-700 font-medium leading-relaxed">
-                You are a classic right-side trend follower with a tendency to secure profits early, though occasional emotional trades drag down your overall P/L ratio.
-              </p>
-            </div>
-
-            {/* Key Evidence Table */}
-            <div className="bg-slate-50/80 backdrop-blur-md rounded-xl border border-slate-100 shadow-[0_4px_12px_rgba(11,37,69,0.02)] overflow-hidden">
-              <div className="p-2.5 border-b border-slate-100 bg-white/50">
-                <div className="flex items-center gap-1.5">
-                  <BookOpen size={12} className="text-[#0B2545]" />
-                  <span className="text-[10px] font-bold text-[#0B2545] uppercase tracking-wider">Key Evidence</span>
-                </div>
-              </div>
-              <div className="p-2.5">
-                <table className="w-full text-left text-[10px]">
-                  <thead>
-                    <tr className="text-slate-400">
-                      <th className="font-medium pb-2 uppercase tracking-wide">Dimension</th>
-                      <th className="font-medium pb-2 uppercase tracking-wide">Ledger Perf.</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-slate-600 align-top">
-                    <tr className="border-t border-slate-100/60">
-                      <td className="py-1.5 font-bold text-[#0B2545] w-[45%] pr-2">Holding Period</td>
-                      <td className="py-1.5">Avg 4.5 days (Short-Swing)</td>
-                    </tr>
-                    <tr className="border-t border-slate-100/60">
-                      <td className="py-1.5 font-bold text-[#0B2545] pr-2">Profit Realization</td>
-                      <td className="py-1.5">Exits 50% at target, trails rest</td>
-                    </tr>
-                    <tr className="border-t border-slate-100/60">
-                      <td className="py-1.5 font-bold text-[#0B2545] pr-2">Overall Result</td>
-                      <td className="py-1.5 text-emerald-600 font-bold">+12.4% (Outperforming)</td>
-                    </tr>
-                    <tr className="border-t border-slate-100/60">
-                      <td className="py-1.5 font-bold text-[#0B2545] pr-2 leading-tight">Position Reduction Method</td>
-                      <td className="py-1.5 leading-tight">Fast on profits, slow on stops</td>
-                    </tr>
-                    <tr className="border-t border-slate-100/60">
-                      <td className="py-1.5 font-bold text-[#0B2545] pr-2 leading-tight">Allocation Preference</td>
-                      <td className="py-1.5 leading-tight">Heavy in Metals & Tech</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Profit Structure */}
-            <div className="bg-white/80 backdrop-blur-md p-3 rounded-xl border border-white shadow-[0_4px_12px_rgba(11,37,69,0.04)]">
-              <div className="flex items-center gap-1.5 mb-3">
-                <BarChart2 size={12} className="text-[#0B2545]" />
-                <span className="text-[10px] font-bold text-[#0B2545] uppercase tracking-wider">Profit Structure</span>
-              </div>
-              
-              <div className="space-y-2.5 mb-3">
-                <div>
-                  <div className="flex justify-between text-[10px] mb-1">
-                    <span className="font-bold text-[#0B2545]">1. ZIJIN MINING</span>
-                    <div>
-                      <span className="text-emerald-500 font-mono font-bold">+¥46,200</span>
-                      <span className="text-emerald-500/70 font-medium ml-1 font-sans text-[9px]">(+9.4%)</span>
-                    </div>
-                  </div>
-                  <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-emerald-500 w-[75%] rounded-full"></div>
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-[10px] mb-1">
-                    <span className="font-bold text-[#0B2545]">2. BIG DATA ETF</span>
-                    <div>
-                      <span className="text-emerald-500 font-mono font-bold">+¥12,450</span>
-                      <span className="text-emerald-500/70 font-medium ml-1 font-sans text-[9px]">(+10.5%)</span>
-                    </div>
-                  </div>
-                  <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-emerald-400 w-[20%] rounded-full"></div>
-                  </div>
-                </div>
-                <div>
-                  <div className="flex justify-between text-[10px] mb-1">
-                    <span className="font-bold text-[#0B2545]">3. COAL IND</span>
-                    <div>
-                      <span className="text-emerald-500 font-mono font-bold">+¥8,300</span>
-                      <span className="text-emerald-500/70 font-medium ml-1 font-sans text-[9px]">(+8.2%)</span>
-                    </div>
-                  </div>
-                  <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-emerald-300 w-[12%] rounded-full"></div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-[#0B2545]/5 p-2 rounded-lg border border-[#0B2545]/10">
-                <span className="text-[10px] font-bold text-[#0B2545] block mb-0.5">Profit Summary:</span>
-                <p className="text-[10px] text-slate-600 leading-relaxed font-medium">
-                  Over <strong className="text-[#0B2545]">75%</strong> of your net profits originate from <strong className="text-[#0B2545]">Long-term Holding</strong> in cyclical sectors, whereas <strong className="text-[#0B2545]">Frequent Trading</strong> accounts for 80% of your drawdowns.
-                </p>
-              </div>
-            </div>
-
-            {/* Portrait */}
-            <div className="bg-[#0B2545] p-3 rounded-xl border border-[#0B2545] shadow-lg relative overflow-hidden">
-              <div className="absolute -right-6 -top-6 w-24 h-24 bg-white/5 rounded-full blur-2xl pointer-events-none"></div>
-              <div className="flex items-center gap-1.5 mb-1.5 relative z-10">
-                <User size={12} className="text-[#EE6C4D]" />
-                <span className="text-[10px] font-bold text-white uppercase tracking-wider">Trader Portrait</span>
-              </div>
-              <p className="text-[11px] text-slate-300 leading-relaxed font-medium relative z-10">
-                A sharp momentum catcher who excels at picking sector leaders, needing just a bit more discipline on hard stops to unlock full potential.
-              </p>
-            </div>
-          </div>
-        );
-
-        if (step === 'result') {
-          msgs.push({ id: 'i1_a', role: 'agent', content: insightsResult });
-          setMessages(msgs);
-        }
+        // The dedicated effect below requests the account-backed analysis.
+        return;
       } else if (isDailyReference || isAssetReference) {
         setMessages([]);
         setInput(searchParams.get('prompt') || (isAssetReference ? 'How did I execute these trades?' : 'Review this day with my saved trades and notes.'));
@@ -873,6 +965,33 @@ export default function Agent() {
       }
     }
   }, [tradeId, action, step, tab, reference, searchParams, setSearchParams, backtestResult, backtestLoading, backtestError, backtestMonths, savedTask]);
+
+  useEffect(() => {
+    if (action !== 'insights' || tab !== 'chat') return;
+    let active = true;
+    const controller = new AbortController();
+    setMessages([
+      { id: 'i1_u', role: 'user', content: INSIGHTS_PRESET_QUESTION },
+      { id: 'i1_a', role: 'agent', content: <Thinking /> },
+    ]);
+    // Defer the request so React Strict Mode's development cleanup can cancel it.
+    const timer = window.setTimeout(() => {
+      void apiRequest<BehaviorInsights>('/api/agent/insights', { method: 'POST', signal: controller.signal })
+        .then(data => {
+          if (active) {
+            if (data.conversation_id) setConversationId(data.conversation_id);
+            setMessages(previous => previous.map(message => message.id === 'i1_a'
+              ? { ...message, content: <InsightsResult data={data} /> } : message));
+          }
+        })
+        .catch(error => {
+          if (!active) return;
+          const detail = error instanceof Error ? error.message : 'Behavior Insights failed. Please try again.';
+          setMessages(previous => previous.map(message => message.id === 'i1_a' ? { ...message, content: <div className="space-y-2 text-[11px]"><p role="alert" className="text-rose-600">{detail}</p><button className="font-bold text-[#EE6C4D] underline" onClick={() => setInsightsAttempt(value => value + 1)}>Retry analysis</button></div> } : message));
+        });
+    }, 0);
+    return () => { active = false; controller.abort(); window.clearTimeout(timer); };
+  }, [action, tab, insightsAttempt]);
 
   useEffect(() => {
     if (!keepAtBottomRef.current) return;
@@ -927,7 +1046,9 @@ export default function Agent() {
           trade_id: tradeId ?? null,
           step: step ?? null,
           reference: reference ?? null,
-          asset: action === 'draft' || isAssetReference ? draftAsset : null,
+          asset: action === 'review'
+            ? (searchParams.get('asset') || (step === 'awaiting_asset' ? currentInput : null))
+            : action === 'draft' || isAssetReference ? draftAsset : null,
           symbol: searchParams.get('symbol'),
           pnl: searchParams.get('pnl'),
           trade_context,
@@ -948,7 +1069,7 @@ export default function Agent() {
       }
       setMessages(prev => prev.map(m =>
         m.id === pendingId
-          ? { id: `a_${Date.now()}`, role: 'agent', content: <p className="text-[12px] leading-relaxed whitespace-pre-wrap">{data.reply}</p> }
+          ? { id: `a_${Date.now()}`, role: 'agent', content: <AgentMarkdown text={data.reply} reviewAsset={action === 'review' ? (searchParams.get('asset') || currentInput) : undefined} /> }
           : m
       ));
     } catch (err) {
@@ -979,7 +1100,7 @@ export default function Agent() {
       const items = await apiRequest<ConversationSummary[]>('/api/agent/conversations?limit=50');
       setHistoryItems(items);
     } catch (error) {
-      setHistoryError(error instanceof Error ? error.message : '历史对话加载失败。');
+      setHistoryError('Could not load conversation history. Please try again.');
     } finally {
       setHistoryLoading(false);
     }
@@ -995,13 +1116,22 @@ export default function Agent() {
       setInput('');
       setConversationId(history.conversation_id);
       keepAtBottomRef.current = true;
-      setMessages(history.messages.map((message, index) => ({
-        id: `${history.conversation_id}_${index}`,
-        role: message.role === 'assistant' ? 'agent' : 'user',
-        content: message.role === 'assistant'
-          ? <p className="text-[12px] leading-relaxed whitespace-pre-wrap">{message.content}</p>
-          : message.content,
-      })));
+      const reviewedAsset = history.messages.find(message => message.role === 'user')?.content;
+      const restoredMessages: Message[] = history.messages.map((message, index) => {
+        const savedInsights = message.role === 'assistant' ? parseSavedInsights(message.content) : null;
+        return {
+          id: `${history.conversation_id}_${index}`,
+          role: message.role === 'assistant' ? 'agent' : 'user',
+          content: message.role === 'assistant'
+            ? savedInsights ? <InsightsResult data={savedInsights} /> : <AgentMarkdown text={message.content} reviewAsset={reviewedAsset} />
+            : message.content,
+        };
+      });
+      const presetQuestion = history.title === REVIEW_PRESET_QUESTION ? REVIEW_PRESET_QUESTION : history.title === DRAFT_PRESET_QUESTION ? DRAFT_PRESET_QUESTION : null;
+      if (presetQuestion && history.messages[0]?.content !== presetQuestion) {
+        restoredMessages.unshift({ id: `${history.conversation_id}_preset`, role: 'user', content: presetQuestion });
+      }
+      setMessages(restoredMessages);
       setSendError(null);
       setHistoryOpen(false);
       const cleanChatParams = new URLSearchParams({ tab: 'chat' });
@@ -1010,7 +1140,7 @@ export default function Agent() {
         setSearchParams(cleanChatParams);
       }
     } catch (error) {
-      setHistoryError(error instanceof Error ? error.message : '无法恢复这段对话，请重试。');
+      setHistoryError('Could not open this conversation. Please try again.');
     } finally {
       setLoadingConversation(null);
     }
@@ -1028,6 +1158,10 @@ export default function Agent() {
     if (isAssetTracking) setSavedTracking(Boolean(readLocalResult(`tradingnote:asset-tracking:${tradeId}`)));
 
     if (tab === 'chat') {
+      if (action === 'review' && step === 'awaiting_asset') {
+        skipNextRouteSyncRef.current = true;
+        setSearchParams({ action: 'review', step: 'followup', tab: 'chat', asset: currentInput });
+      }
       void sendChatMessage(currentInput);
       return;
     }
@@ -1114,6 +1248,15 @@ export default function Agent() {
   };
 
   const handleAction = (act: string) => {
+    if (act === 'review' || act === 'insights' || act === 'draft') {
+      chatSessionRef.current += 1;
+      setConversationId(null);
+    }
+    if (act === 'review') {
+      setSearchParams({ action: act, step: 'awaiting_asset', tab: 'chat' });
+      return;
+    }
+    if (act === 'insights') setInsightsAttempt(value => value + 1);
     setSearchParams({ action: act, tab: 'chat' });
   };
 
@@ -1278,24 +1421,24 @@ export default function Agent() {
           <section className="mx-auto flex h-[82%] w-full max-w-lg flex-col rounded-t-2xl bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
               <div>
-                <h2 className="text-[14px] font-bold text-[#0B2545]">对话历史</h2>
-                <p className="mt-0.5 text-[10px] text-slate-400">选择一条记录即可查看并继续对话</p>
+                <h2 className="text-[14px] font-bold text-[#0B2545]">Conversation History</h2>
+                <p className="mt-0.5 text-[10px] text-slate-400">Select a conversation to view and continue.</p>
               </div>
-              <button onClick={() => setHistoryOpen(false)} aria-label="关闭对话历史" className="rounded-full bg-slate-100 p-2 text-slate-500"><X size={14} /></button>
+              <button onClick={() => setHistoryOpen(false)} aria-label="Close conversation history" className="rounded-full bg-slate-100 p-2 text-slate-500"><X size={14} /></button>
             </div>
-            {historyError && <div role="alert" className="mx-3 mt-3 rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-[11px] text-rose-700">{historyError}<button onClick={() => void openHistory()} className="ml-2 font-bold underline">重试</button></div>}
+            {historyError && <div role="alert" className="mx-3 mt-3 rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-[11px] text-rose-700">{historyError}<button onClick={() => void openHistory()} className="ml-2 font-bold underline">Retry</button></div>}
             <div className="flex-1 overflow-y-auto p-3">
               {historyLoading ? (
-                <div className="flex items-center justify-center gap-2 py-10 text-[11px] text-slate-400"><Loader2 size={14} className="animate-spin" />正在加载历史对话…</div>
+                <div className="flex items-center justify-center gap-2 py-10 text-[11px] text-slate-400"><Loader2 size={14} className="animate-spin" />Loading conversations...</div>
               ) : historyItems.length === 0 && !historyError ? (
-                <div className="py-10 text-center text-[11px] text-slate-400">还没有保存的对话</div>
+                <div className="py-10 text-center text-[11px] text-slate-400">No saved conversations yet.</div>
               ) : historyItems.map(item => (
                 <button key={item.conversation_id} onClick={() => void restoreConversation(item.conversation_id)} disabled={Boolean(loadingConversation)} className="mb-2 w-full rounded-xl border border-slate-200 p-3 text-left transition-colors hover:border-[#EE6C4D]/50 disabled:opacity-60">
                   <div className="flex items-start justify-between gap-3">
-                    <span className="line-clamp-2 text-[12px] font-bold text-[#0B2545]">{item.title || '新对话'}</span>
+                    <span className="line-clamp-2 text-[12px] font-bold text-[#0B2545]">{item.title || 'New conversation'}</span>
                     {loadingConversation === item.conversation_id && <Loader2 size={13} className="shrink-0 animate-spin text-[#EE6C4D]" />}
                   </div>
-                  <div className="mt-1.5 flex justify-between text-[9px] text-slate-400"><span>{item.message_count} 条消息</span><span>{new Date(item.updated_at).toLocaleString()}</span></div>
+                  <div className="mt-1.5 flex justify-between text-[9px] text-slate-400"><span>{item.message_count} {item.message_count === 1 ? 'message' : 'messages'}</span><span>{new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(item.updated_at))}</span></div>
                 </button>
               ))}
             </div>
@@ -1360,7 +1503,11 @@ export default function Agent() {
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder={tab === 'backtest' && searchParams.get('bt_step') === '1' ? "Ticker (601899 or AAPL)..." : "Ask a master what they are buying..."}
+                placeholder={tab === 'backtest' && searchParams.get('bt_step') === '1'
+                  ? "Ticker (601899 or AAPL)..."
+                  : action === 'review' && step === 'awaiting_asset'
+                    ? "e.g. Zijin Mining or 601899"
+                    : "Ask a master what they are buying..."}
                 className="flex-1 min-w-0 w-full max-h-[72px] min-h-[36px] bg-transparent resize-none text-[13px] font-medium text-[#0B2545] p-2 pl-0 focus:outline-none placeholder:text-slate-400"
                 rows={1}
               />

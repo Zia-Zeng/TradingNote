@@ -8,6 +8,18 @@ from uuid import uuid4
 
 
 DATABASE_PATH = Path(__file__).resolve().parents[1] / "data" / "tradingnote.sqlite3"
+REVIEW_PRESET_QUESTION = "Can you review my recent trades and point out any mistakes?"
+INSIGHTS_PRESET_QUESTION = "Tag me and analyze my recent trading style"
+DRAFT_PRESET_QUESTION = "Help me draft a solid investment plan based on my recent holdings."
+INSIGHTS_MESSAGE_PREFIX = "BEHAVIOR_INSIGHTS_JSON:"
+
+
+def _conversation_title(title: str, first_reply: str | None, first_model_user: str | None) -> str:
+    if (first_reply or "").startswith("Here is the detailed review for ") or "\naction: review\n" in (first_model_user or ""):
+        return REVIEW_PRESET_QUESTION
+    if "\naction: draft\n" in (first_model_user or ""):
+        return DRAFT_PRESET_QUESTION
+    return title
 
 
 @contextmanager
@@ -122,6 +134,8 @@ def save_turn(
     model_user_content: str,
     assistant_content: str,
     created_at: str,
+    title: str | None = None,
+    assistant_model_content: str | None = None,
 ) -> None:
     with database() as connection:
         connection.execute(
@@ -130,7 +144,7 @@ def save_turn(
             VALUES (?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at
             """,
-            (conversation_id, user_content[:100], created_at, created_at),
+            (conversation_id, (title or user_content)[:100], created_at, created_at),
         )
         connection.executemany(
             """
@@ -139,7 +153,7 @@ def save_turn(
             """,
             [
                 (conversation_id, "user", user_content, model_user_content, created_at),
-                (conversation_id, "assistant", assistant_content, None, created_at),
+                (conversation_id, "assistant", assistant_content, assistant_model_content, created_at),
             ],
         )
 
@@ -148,7 +162,9 @@ def list_conversations(limit: int) -> list[dict[str, str | int]]:
     with database() as connection:
         rows = connection.execute(
             """
-            SELECT c.id, c.title, c.created_at, c.updated_at, COUNT(m.id) AS message_count
+            SELECT c.id, c.title, c.created_at, c.updated_at, COUNT(m.id) AS message_count,
+                   (SELECT content FROM messages WHERE conversation_id = c.id AND role = 'assistant' ORDER BY id LIMIT 1) AS first_reply,
+                   (SELECT model_content FROM messages WHERE conversation_id = c.id AND role = 'user' ORDER BY id LIMIT 1) AS first_model_user
             FROM conversations AS c
             LEFT JOIN messages AS m ON m.conversation_id = c.id
             GROUP BY c.id
@@ -161,7 +177,7 @@ def list_conversations(limit: int) -> list[dict[str, str | int]]:
     return [
         {
             "conversation_id": row["id"],
-            "title": row["title"],
+            "title": _conversation_title(row["title"], row["first_reply"], row["first_model_user"]),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "message_count": row["message_count"],
@@ -173,7 +189,7 @@ def list_conversations(limit: int) -> list[dict[str, str | int]]:
 def get_conversation(conversation_id: str) -> dict[str, object] | None:
     with database() as connection:
         conversation = connection.execute(
-            "SELECT id, title, created_at, updated_at FROM conversations WHERE id = ?",
+            "SELECT id, title, created_at, updated_at, (SELECT content FROM messages WHERE conversation_id = conversations.id AND role = 'assistant' ORDER BY id LIMIT 1) AS first_reply, (SELECT model_content FROM messages WHERE conversation_id = conversations.id AND role = 'user' ORDER BY id LIMIT 1) AS first_model_user FROM conversations WHERE id = ?",
             (conversation_id,),
         ).fetchone()
         if conversation is None:
@@ -191,7 +207,7 @@ def get_conversation(conversation_id: str) -> dict[str, object] | None:
 
     return {
         "conversation_id": conversation["id"],
-        "title": conversation["title"],
+        "title": _conversation_title(conversation["title"], conversation["first_reply"], conversation["first_model_user"]),
         "created_at": conversation["created_at"],
         "updated_at": conversation["updated_at"],
         "messages": [dict(row) for row in messages],
