@@ -2421,12 +2421,7 @@ async def generate_trade_reviews(trade_date: str) -> dict[str, Any]:
                 draft = NoTradeReviewDraft.model_validate_json(await _deepseek_json(model_context, prompt, 1200))
                 trace["stages"]["draft"] = {"status": "valid_json", "model": os.getenv("DEEPSEEK_MODEL", "deepseek-flash"),
                                              "output": draft.model_dump()}
-                audited, audit_trace = await _audit_no_trade_draft(model_context, draft, 1200)
-                trace["stages"]["quality_review"] = audit_trace
-                if not audited.passed:
-                    raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Trade Review did not pass its content quality check. Please regenerate.")
-                draft = NoTradeReviewDraft(overview=audited.overview, observations=audited.observations)
-                trace["stages"]["quality_review"]["output"] = draft.model_dump()
+                trace["stages"]["quality_review"] = {"status": "skipped_by_request"}
             except HTTPException:
                 raise
             except Exception as exc:
@@ -2555,8 +2550,8 @@ ReviewContext 未明确提供单笔或组合盈亏时，不得自行计算或声
                 detail="DeepSeek returned invalid trade reviews after one structured-output repair.",
             ) from repair_exc
     pipeline_trace: dict[str, Any] = {
-        "pipeline_version": "trade-review-v2.1-content-first-1",
-        "prompt_version": "v2.1-content-first-1",
+        "pipeline_version": "trade-review-v2.1-content-first-2",
+        "prompt_version": "v2.1-content-first-2",
         "route": mode,
         "model": os.getenv("DEEPSEEK_MODEL", "deepseek-flash"),
         "stages": {
@@ -2585,41 +2580,17 @@ ReviewContext 未明确提供单笔或组合盈亏时，不得自行计算或声
                       "output": draft.model_dump()},
         },
     }
-    try:
-        audit, audit_trace = await _audit_trade_review_draft(
-            model_context, draft, min(5000, 1400 + 600 * len(trades)),
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.warning("Trade Review quality audit failed for %s (%s).", normalized_date, type(exc).__name__)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Trade Review quality check failed. Please regenerate.") from exc
-    pipeline_trace["stages"]["quality_review"] = audit_trace
-    if not audit.passed:
-        pipeline_trace["stages"]["quality_review"]["status"] = "failed_after_repair"
-        logger.warning("Trade Review quality audit did not pass for %s: %s", normalized_date, audit.issues)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Trade Review did not pass its content quality check. Please regenerate.")
-    draft = DailyTradeReviewsDraft(
-        overview=audit.overview,
-        focus_next=audit.focus_next,
-        questions=audit.questions,
-        trade_reviews=audit.trade_reviews,
-    )
-    pipeline_trace["stages"]["quality_review"]["status"] = "passed"
-    pipeline_trace["stages"]["quality_review"]["output"] = {
-        "overview": draft.overview,
-        "focus_next": draft.focus_next,
-        "questions": draft.questions,
-        "trade_reviews": [item.model_dump() for item in draft.trade_reviews],
-    }
+    pipeline_trace["stages"]["quality_review"] = {"status": "skipped_by_request"}
     reviews_by_id = {item.trade_id: item for item in draft.trade_reviews}
     expected_trade_ids = {str(trade.get("id") or "") for trade in trades}
     returned_trade_ids = set(reviews_by_id)
     unknown_trade_ids = returned_trade_ids - expected_trade_ids
     if unknown_trade_ids:
         logger.warning("Trade Review returned unknown trade IDs for %s: %s", normalized_date, sorted(unknown_trade_ids))
-    if not returned_trade_ids.intersection(expected_trade_ids):
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Trade Review did not cover the recorded trades. Please regenerate.")
+    missing_trade_ids = expected_trade_ids - returned_trade_ids
+    if missing_trade_ids:
+        logger.warning("Trade Review draft omitted trades for %s: %s; local per-trade fallback will preserve output.",
+                       normalized_date, sorted(missing_trade_ids))
     normalized_reviews = []
     item_gates: list[dict[str, Any]] = []
     for trade in trades:
@@ -2654,21 +2625,32 @@ ReviewContext 未明确提供单笔或组合盈亏时，不得自行计算或声
         if not refs and current_ref in evidence_by_id:
             refs = [current_ref]
         if not review:
-            # Keep this as a last-resort local repair for this trade only; never
-            # erase a substantive paragraph because one claim failed a gate.
-            review = "现有成交记录可以确认本次操作；相关理由或背景需要结合已记录笔记进一步判断。"
+            # Preserve a visible per-trade result when the model omits an item;
+            # this local fallback never replaces substantive model analysis.
+            evidence_text = " ".join(
+                str(evidence_by_id.get(ref, {}).get("excerpt") or "") for ref in allowed_refs
+            )
+            review = (
+                "本次成交已记录；结合相关笔记与执行细节复盘。"
+                if re.search(r"[\u4e00-\u9fff]", evidence_text)
+                else "This trade is recorded for review alongside the related notes and execution details."
+            )
             if current_ref in evidence_by_id and current_ref not in refs:
                 refs = [current_ref]
         if not title:
-            title = "交易逻辑与执行复盘"
+            title = (
+                "交易逻辑与执行复盘"
+                if re.search(r"[\u4e00-\u9fff]", review)
+                else "Trade rationale and execution review"
+            )
         item_gates.append({
             "trade_id": trade_id,
             "status": "passed_numeric_review_advisory_only" if unmatched_numbers else (
-                "minimal_local_repair" if not (drafted and drafted.review.strip()) else "passed"
+                "local_missing_item_fallback" if not (drafted and drafted.review.strip()) else "draft_preserved"
             ),
             "evidence_refs": refs,
             "unmatched_numeric_tokens_for_diagnosis": unmatched_numbers,
-            "analysis_preserved": bool(drafted and drafted.review.strip() and review != "现有成交记录可以确认本次操作；相关理由或背景需要结合已记录笔记进一步判断。"),
+            "analysis_preserved": bool(drafted and drafted.review.strip()),
         })
         normalized_reviews.append(DailyTradeReview(
             trade_id=trade_id,
