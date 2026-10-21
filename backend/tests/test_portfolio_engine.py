@@ -65,6 +65,12 @@ class PortfolioRollForwardTests(unittest.TestCase):
         self.assertEqual(state["pnl_by_currency"], {"CNY": 100, "HKD": 100})
         self.assertFalse(state["daily_state"]["total_assets_complete"])
 
+    def test_trade_with_clock_time_and_separate_date_is_included(self):
+        result = roll_portfolio(self.baseline, [
+            {"id": "b1", "date": "2026-10-14", "time": "10:45", "type": "Buy", "code": "600001", "market": "CN", "currency": "CNY", "qty": 10, "price": 14},
+        ], self.prices, "2026-10-15")
+        self.assertEqual(result["days"][0]["daily_state"]["positions"][0]["quantity"], 20)
+
 
 if __name__ == "__main__":
     unittest.main()

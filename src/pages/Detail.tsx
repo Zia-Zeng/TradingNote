@@ -734,17 +734,17 @@ export default function Detail() {
                     </div>
                     {editingNoteId === item.id ? (
                       <div>
-                        <input
-                          type="text"
+                        <textarea
                           value={editingNoteContent}
                           maxLength={140}
+                          rows={3}
                           onChange={event => setEditingNoteContent(event.target.value)}
                           onKeyDown={event => {
-                            if (event.key === 'Enter') void handleUpdateAssetNote(item.id);
+                            if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) void handleUpdateAssetNote(item.id);
                             if (event.key === 'Escape') setEditingNoteId(null);
                           }}
                           aria-label="Edit note text"
-                          className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-[12px] text-[#0B2545] focus:outline-none focus:border-[#EE6C4D]"
+                          className="w-full resize-y bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-[12px] text-[#0B2545] focus:outline-none focus:border-[#EE6C4D]"
                         />
                         <div className="flex justify-end gap-2 mt-2">
                           <button onClick={() => setEditingNoteId(null)} disabled={noteMutationId !== null} className="text-[11px] font-bold text-slate-500 disabled:opacity-50">Cancel</button>
@@ -856,16 +856,16 @@ export default function Detail() {
               </div>
               <div className="text-[10px] text-slate-400 font-mono font-medium">{newAssetNote.length}/140</div>
             </div>
-            <div className="flex gap-2">
-              <input
-                type="text"
+            <div className="flex items-start gap-2">
+              <textarea
                 value={newAssetNote}
                 maxLength={140}
+                rows={2}
                 onChange={event => setNewAssetNote(event.target.value)}
-                onKeyDown={event => { if (event.key === 'Enter') void handleAddAssetNote(); }}
+                onKeyDown={event => { if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) void handleAddAssetNote(); }}
                 placeholder={`What are your thoughts on ${data.symbol}?`}
                 aria-label={`My notes for ${data.symbol}`}
-                className="flex-1 bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-[12px] focus:outline-none focus:border-[#EE6C4D] placeholder:text-slate-400 text-[#0B2545] shadow-sm transition-colors min-w-0"
+                className="flex-1 resize-y bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-[12px] focus:outline-none focus:border-[#EE6C4D] placeholder:text-slate-400 text-[#0B2545] shadow-sm transition-colors min-w-0"
               />
               <button
                 onClick={() => void handleAddAssetNote()}

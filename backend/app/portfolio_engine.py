@@ -20,6 +20,16 @@ def _key(row: dict[str, Any]) -> tuple[str, str, str]:
     return market, currency, code
 
 
+def _record_trade_date(trade: dict[str, Any]) -> str | None:
+    for field in ("time", "date", "trade_date"):
+        value = str(trade.get(field) or "")[:10].replace("/", "-")
+        try:
+            return date.fromisoformat(value).isoformat()
+        except ValueError:
+            continue
+    return None
+
+
 def roll_portfolio(
     baseline: dict[str, Any],
     trades: list[dict[str, Any]],
@@ -37,7 +47,7 @@ def roll_portfolio(
     start = date.fromisoformat(baseline_date)
     end = date.fromisoformat(end_date)
     keys = {_key(row) for row in baseline.get("rows", [])}
-    keys.update(_key(row) for row in trades if baseline_date < str(row.get("time") or row.get("trade_date") or "")[:10] <= end_date)
+    keys.update(_key(row) for row in trades if baseline_date < (_record_trade_date(row) or "") <= end_date)
     closes = {key: {str(bar["date"]): float(bar["close"]) for bar in prices.get(key, []) if bar.get("date") and bar.get("close") is not None} for key in keys}
     session_dates = sorted({day for per_key in closes.values() for day in per_key if baseline_date <= day <= end_date})
 
@@ -72,8 +82,8 @@ def roll_portfolio(
 
     trades_by_date: dict[str, list[dict[str, Any]]] = {}
     for trade in trades:
-        trade_date = str(trade.get("time") or trade.get("trade_date") or "")[:10]
-        if baseline_date < trade_date <= end_date:
+        trade_date = _record_trade_date(trade)
+        if trade_date and baseline_date < trade_date <= end_date:
             trades_by_date.setdefault(trade_date, []).append(trade)
     for items in trades_by_date.values():
         items.sort(key=lambda item: (str(item.get("time") or item.get("trade_date") or ""), str(item.get("id") or "")))

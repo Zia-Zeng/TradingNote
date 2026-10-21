@@ -393,6 +393,15 @@ def _trade_date(value: Any) -> str | None:
     return None
 
 
+def _record_trade_date(trade: dict[str, Any]) -> str | None:
+    """Resolve the journal date even when `time` stores only HH:mm."""
+    for field in ("time", "date", "trade_date"):
+        resolved = _trade_date(trade.get(field))
+        if resolved:
+            return resolved
+    return None
+
+
 @router.get("/assets", response_model=AssetSnapshot | None)
 def get_asset_snapshot() -> dict[str, Any] | None:
     _ensure_today_storage()
@@ -622,7 +631,7 @@ def _calculate_portfolio_overview(
     warnings: list[str] = []
     ledger_consistent = True
     for trade in sorted(trades, key=lambda item: str(item.get("time") or item.get("trade_date") or "")):
-        trade_date = _trade_date(trade.get("time") or trade.get("trade_date") or "")
+        trade_date = _record_trade_date(trade)
         if not trade_date or not baseline_date < trade_date <= as_of:
             continue
         key = _portfolio_instrument_key(trade)
@@ -762,19 +771,19 @@ async def get_portfolio_overview(as_of: date = Query()) -> dict[str, Any]:
     else:
         ledger = [
             trade for trade in list_trades()
-            if (trade_date := _trade_date(trade.get("time") or trade.get("trade_date") or ""))
+            if (trade_date := _record_trade_date(trade))
             and trade_date <= as_of.isoformat()
         ]
         if not ledger:
             return _calculate_portfolio_overview(None, [], {}, as_of.isoformat())
-        first_trade_date = min(_trade_date(trade.get("time") or trade.get("trade_date") or "") for trade in ledger)
+        first_trade_date = min(_record_trade_date(trade) for trade in ledger)
         baseline_date = (date.fromisoformat(first_trade_date) - timedelta(days=1)).isoformat()
         snapshot = {
             "id": "trade-ledger-baseline", "as_of": baseline_date, "account": "Trade ledger",
             "imported_at": "", "total_assets": None, "total_assets_currency": None,
             "total_assets_as_of": baseline_date, "rows": [],
         }
-    trades = [trade for trade in list_trades() if snapshot["as_of"] < (_trade_date(trade.get("time") or trade.get("trade_date") or "") or "") <= as_of.isoformat()]
+    trades = [trade for trade in list_trades() if snapshot["as_of"] < (_record_trade_date(trade) or "") <= as_of.isoformat()]
     descriptors: dict[tuple[str, str, str], dict[str, str]] = {}
     for record in [*snapshot["rows"], *trades]:
         key = _portfolio_instrument_key(record)
@@ -871,7 +880,7 @@ def _calculate_portfolio_pnl(
     used_snapshots = [baseline, *later_snapshots]
     all_trades = []
     for trade in trades:
-        trade_date = _trade_date(trade.get("time") or trade.get("trade_date") or "")
+        trade_date = _record_trade_date(trade)
         if trade_date and baseline_date < trade_date <= end_date:
             all_trades.append(trade)
 
@@ -917,7 +926,7 @@ def _calculate_portfolio_pnl(
         snapshots_by_date[snapshot["as_of"]] = snapshot
     trades_by_date: dict[str, list[dict[str, Any]]] = {}
     for trade in all_trades:
-        trade_date = _trade_date(trade.get("time") or trade.get("trade_date") or "")
+        trade_date = _record_trade_date(trade)
         if trade_date:
             trades_by_date.setdefault(trade_date, []).append(trade)
 
@@ -1164,14 +1173,14 @@ async def get_portfolio_pnl(
     snapshots = [{"id": row["id"], "as_of": row["as_of"], "account": row["account"], "imported_at": row["imported_at"], "total_assets": row["total_assets"], "total_assets_currency": row["total_assets_currency"], "initial_cash": row["initial_cash"], "rows": json.loads(row["payload"])} for row in rows]
     ledger_trades = [
         trade for trade in list_trades()
-        if (trade_date := _trade_date(trade.get("time") or trade.get("trade_date") or ""))
+        if (trade_date := _record_trade_date(trade))
         and trade_date <= end_date.isoformat()
     ]
     if not snapshots and ledger_trades:
         # A complete dated trade ledger is now the portfolio baseline. Rebuild
         # positions from its first transaction instead of requiring an account
         # screenshot snapshot before P&L can be calculated.
-        first_trade_date = min(_trade_date(trade.get("time") or trade.get("trade_date") or "") for trade in ledger_trades)
+        first_trade_date = min(_record_trade_date(trade) for trade in ledger_trades)
         baseline_date = (date.fromisoformat(first_trade_date) - timedelta(days=1)).isoformat()
         snapshots = [{
             "id": "trade-ledger-baseline",
@@ -1218,7 +1227,7 @@ async def get_portfolio_pnl(
     # dated transactions. Later snapshots remain stored as source evidence but
     # are not silently mixed into the roll-forward.
     relevant_snapshots = [baseline]
-    trades = [trade for trade in list_trades() if baseline["as_of"] < (_trade_date(trade.get("time") or trade.get("trade_date") or "") or "") <= end_date.isoformat()]
+    trades = [trade for trade in list_trades() if baseline["as_of"] < (_record_trade_date(trade) or "") <= end_date.isoformat()]
     source_fingerprint = _portfolio_source_fingerprint(baseline, trades)
     with database() as connection:
         cached_rows = connection.execute(
@@ -1388,7 +1397,7 @@ def _validated_review_date(trade_date: str) -> str:
 
 def _review_inputs(trade_date: str) -> tuple[str, list[dict[str, Any]], list[str]]:
     normalized_date = _validated_review_date(trade_date)
-    trades = [trade for trade in list_trades() if _trade_date(trade.get("time")) == normalized_date]
+    trades = [trade for trade in list_trades() if _record_trade_date(trade) == normalized_date]
     _ensure_today_storage()
     with database() as connection:
         note_rows = connection.execute(
@@ -1466,14 +1475,14 @@ def _trade_review_context(trade_date: str) -> dict[str, Any]:
     normalized_date = _validated_review_date(trade_date)
     all_trades = [
         trade for trade in list_trades()
-        if (_trade_date(trade.get("time") or trade.get("trade_date") or "") or "") <= normalized_date
+        if (_record_trade_date(trade) or "") <= normalized_date
     ]
     all_trades.sort(key=lambda item: str(item.get("time") or item.get("trade_date") or ""))
-    today_trades = [trade for trade in all_trades if _trade_date(trade.get("time") or trade.get("trade_date") or "") == normalized_date]
+    today_trades = [trade for trade in all_trades if _record_trade_date(trade) == normalized_date]
     today_asset_keys = {_review_asset_key(trade) for trade in today_trades}
     prior_same_asset = [
         trade for trade in all_trades
-        if _trade_date(trade.get("time") or trade.get("trade_date") or "") != normalized_date
+        if _record_trade_date(trade) != normalized_date
         and _review_asset_key(trade) in today_asset_keys
     ]
     # Give each asset its own recent history instead of letting a busy asset
@@ -1483,7 +1492,7 @@ def _trade_review_context(trade_date: str) -> dict[str, Any]:
         prior_by_asset.setdefault(_review_asset_key(trade), []).append(trade)
     prior_same_asset = [trade for trades in prior_by_asset.values() for trade in trades[-4:]]
     prior_same_asset.sort(key=lambda item: str(item.get("time") or item.get("trade_date") or ""))
-    recent_trades = [trade for trade in all_trades if _trade_date(trade.get("time") or trade.get("trade_date") or "") != normalized_date][-8:]
+    recent_trades = [trade for trade in all_trades if _record_trade_date(trade) != normalized_date][-8:]
 
     _ensure_today_storage()
     with database() as connection:
@@ -2573,7 +2582,7 @@ ReviewContext 未明确提供单笔或组合盈亏时，不得自行计算或声
 def _import_duplicate_key(trade: dict[str, Any]) -> tuple[Any, ...]:
     identity = str(trade.get("code") or trade.get("symbol") or "").strip().casefold()
     return (
-        _trade_date(trade.get("time")),
+        _record_trade_date(trade),
         str(trade.get("market") or "CN").strip().upper(),
         identity,
         str(trade.get("type") or "").strip().casefold(),

@@ -45,7 +45,7 @@ Install the `supermind-quant-developer` skill runner on the backend host. Put `M
 
 The Feed page requests `GET /api/feed`. The API finds a recent financial-market headline with Tavily, generates five English essays through DeepSeek using five distinct books from the configured reading list, and caches the edition in SQLite. Each article includes a title, up to 3 tags, a 20–30-word summary, and an approximately 300-word essay. A background task prepares the next edition at midnight Asia/Shanghai; opening Feed also creates that day's edition if the scheduled run was missed. Each essay discusses the shared headline and closes with cautious, evidence-based trading guidance.
 
-The current system prompt is available in Swagger at `GET /api/feed/prompt` and in `backend/app/prompts/feed_system.txt`. The API reads the file for each generation, so prompt edits take effect without restarting the backend.
+Swagger UI (`/docs`) has a **Feed** section with `GET /api/feed` and `GET /api/feed/prompt`. Expand the prompt endpoint to read its purpose or call it to retrieve the current system prompt as JSON. The prompt is stored in `backend/app/prompts/feed_system.txt`; the API reads the file for each generation and prompt request, so edits take effect without restarting the backend.
 
 The scheduler runs inside the Agent API process. Keep that backend running for the midnight job, and configure both `TAVILY_API_KEY` and `DEEPSEEK_API_KEY` in `backend/.env`. GitHub Pages only hosts the static frontend, so a deployed Feed also needs a continuously running backend: set `VITE_API_BASE_URL` to its HTTPS API URL when building the frontend, and add the frontend origin to `FRONTEND_ORIGINS` on the backend. Without a reachable backend and those keys, Feed shows a setup message instead of generated articles.
 
@@ -65,6 +65,12 @@ Copy-Item .env.example .env
 ```
 
 Open `http://127.0.0.1:8000/docs` to inspect and try the API. The chat endpoint is `POST /api/agent/chat`.
+
+### Behavior Insights
+
+The Agent page's **Behavior Insights** button sends the preset question “Tag me and analyze my recent trading style” to `POST /api/agent/insights`. The API reads the same trade ledger as Today → History Trades and the latest complete daily portfolio state used by Today → Portfolio Overview, with the latest holdings snapshot as a fallback. FIFO-matched sales give the completed average holding period; when no sale matches, the age of open buy lots is shown separately. Gross traded value covers the preceding six calendar months. Its ratio uses complete full-account assets when available; otherwise it is labeled as a current holdings market value proxy that excludes cash. DeepSeek writes `summary`, `profit_structure` commentary, and `suggestion`; the API returns verified `key_evidence` metrics from the backend calculations. The English prompt is in `backend/app/prompts/behavior_insights_system.txt` and available through `GET /api/agent/insights/prompt`.
+
+The API calculates chart values, rather than accepting model-generated numbers. Allocation uses current valued holdings by currency and excludes cash. The bar chart shows each current position's unrealized P/L and return versus its recorded average cost; missing prices or costs remain unavailable. Green represents gains and red represents losses. Turnover is gross six-month trading value divided by the latest recorded account assets in the same currency, so it is approximate. No foreign-exchange conversion or invented six-month total return is applied. Import a holdings snapshot or dated trades before requesting Insights. A configured `DEEPSEEK_API_KEY` is required.
 
 Chat history is stored locally in `backend/data/tradingnote.sqlite3`, which is created automatically when the backend starts and is ignored by Git. The backend exposes `GET /api/agent/conversations` to list recent conversations and `GET /api/agent/conversations/{conversation_id}` to load one conversation. The model receives up to the latest 12 messages as context.
 
