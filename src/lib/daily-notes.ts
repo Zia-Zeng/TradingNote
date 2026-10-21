@@ -38,7 +38,7 @@ export function useDailyNotes(tradeDate?: string) {
       });
       setNotes(current => [note, ...current]);
       setError('');
-      notifyDailyReviewInputsChanged(note.trade_date);
+      notifyDailyReviewInputsChanged(note.trade_date, 'note');
       return note;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '笔记保存失败');
@@ -54,7 +54,7 @@ export function useDailyNotes(tradeDate?: string) {
       });
       setNotes(current => current.map(item => item.id === id ? note : item));
       setError('');
-      notifyDailyReviewInputsChanged(note.trade_date);
+      notifyDailyReviewInputsChanged(note.trade_date, 'note');
       return note;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '笔记更新失败');
@@ -68,7 +68,7 @@ export function useDailyNotes(tradeDate?: string) {
       await apiRequest<void>(`/api/today/notes/${encodeURIComponent(id)}`, { method: 'DELETE' });
       setNotes(current => current.filter(note => note.id !== id));
       setError('');
-      notifyDailyReviewInputsChanged(removedNote?.trade_date ?? tradeDate ?? localDate());
+      notifyDailyReviewInputsChanged(removedNote?.trade_date ?? tradeDate ?? localDate(), 'note');
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '笔记删除失败');
       throw reason;

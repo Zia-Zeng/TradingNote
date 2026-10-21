@@ -2,16 +2,23 @@ import asyncio
 import json
 import tempfile
 import unittest
+from decimal import Decimal
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 from urllib.parse import parse_qs, urlparse
 
 from app import market_data, stocks, storage, today
+from app.trade_review_route import route_trade_review
 
 
 async def _run_in_threadpool_inline(function, *args, **kwargs):
     return function(*args, **kwargs)
+
+
+def _audit_response(draft_json):
+    draft = json.loads(draft_json)
+    return json.dumps({"passed": True, "issues": [], **draft}, ensure_ascii=False)
 
 
 class InstrumentNormalizationTests(unittest.TestCase):
@@ -249,15 +256,82 @@ class DailyTradeReviewContextTests(unittest.TestCase):
             context = today._trade_review_context("2026-10-18")
 
         self.assertEqual(context["record_coverage"], {
-            "trade_count": 1, "motive_count": 1, "plan_count": 1, "trade_note_count": 1, "daily_note_count": 1,
+            "trade_count": 1, "motive_count": 1, "plan_count": 1, "trade_note_count": 1,
+            "daily_note_count": 1, "asset_note_count": 0,
         })
         self.assertEqual([item["id"] for item in context["prior_same_asset_trades"]], ["old-1"])
         self.assertIn("trade:old-1", context["_evidence_by_id"])
         self.assertIn("note:note-1", context["_evidence_by_id"])
 
+    def test_no_trade_day_loads_asset_notes_for_assets_named_in_daily_notes(self):
+        historical = [{"id": "old-1", "time": "2026-10-17T10:00:00", "type": "Buy", "symbol": "Test Co", "code": "600001"}]
+        with tempfile.TemporaryDirectory(dir=storage.DATABASE_PATH.parent) as temporary_directory, \
+                patch.object(storage, "DATABASE_PATH", Path(temporary_directory) / "no-trade-asset-note.sqlite3"), \
+                patch("app.today.list_trades", return_value=historical):
+            storage.initialize_storage()
+            today._ensure_today_storage()
+            with storage.database() as connection:
+                connection.execute(
+                    "INSERT INTO today_notes (id, trade_date, text, created_at) VALUES (?, ?, ?, ?)",
+                    ("day-note-1", "2026-10-18", "继续观察 Test Co 的支撑变化。", "2026-10-18T15:00:00Z"),
+                )
+                connection.execute(
+                    "INSERT INTO asset_notes (id, asset_key, content, created_at) VALUES (?, ?, ?, ?)",
+                    ("asset-note-1", "code:600001", "关注支撑区间与成交量变化。", "2026-10-17T09:00:00Z"),
+                )
+            context = today._trade_review_context("2026-10-18")
+
+        self.assertEqual(context["today_trades"], [])
+        self.assertEqual(context["asset_note_refs"], ["asset-note:asset-note-1"])
+        self.assertEqual(context["asset_timelines"][0]["asset_note_refs"], ["asset-note:asset-note-1"])
+        self.assertIn("asset-note:asset-note-1", context["_evidence_by_id"])
+
+
+class TradeReviewRoutingTests(unittest.TestCase):
+    def test_four_modes_and_note_context(self):
+        base = {"today_trades": [], "asset_timelines": [], "active_plans": [], "day_note_refs": []}
+        self.assertEqual(route_trade_review(base)["mode"], "empty")
+        self.assertEqual(route_trade_review({**base, "day_note_refs": ["note:1"]})["mode"], "plan_tracking")
+        facts = {"id": "facts", "symbol": "A"}
+        self.assertEqual(route_trade_review({**base, "today_trades": [facts]})["mode"], "fact_based_review")
+        planned = {"id": "planned", "symbol": "B", "plan": {"desc": "Exit below support"}, "motive": {"desc": "Risk reduction"}}
+        partial = {"id": "partial", "symbol": "C", "motive": {"desc": "Reduce exposure"}}
+        result = route_trade_review({**base, "today_trades": [planned, partial, facts]})
+        self.assertEqual(result["mode"], "execution_review")
+        self.assertEqual(result["trade_depths"], {"planned": "notes_based", "partial": "notes_based", "facts": "facts_only"})
+
+    def test_no_trade_asset_note_routes_to_observation(self):
+        self.assertEqual(route_trade_review({"today_trades": [], "active_plans": [], "day_note_refs": [],
+                                             "asset_note_refs": ["asset-note:1"]})["mode"], "plan_tracking")
+
+    def test_trade_amount_is_in_evidence_and_numeric_mismatch_is_advisory(self):
+        evidence = {"trade:1": {"ref_id": "trade:1", "label": "trade", "excerpt": "100 × 6.78 CNY; recorded transaction amount: 678 CNY"}}
+        self.assertIn("678 CNY", today._trade_evidence_text({"qty": 100, "price": 6.78, "amount": 678, "currency": "CNY"}))
+        self.assertIn((Decimal("678"), False), today._review_number_tokens("金额为678元"))
+        review = "理由是趋势延续，回调时小额买入值得理解。止损幅度为30%但记录没有依据。"
+        self.assertEqual(today._unsupported_review_number_tokens(review, ["trade:1"], evidence), ["30%"])
+        self.assertIn("30%", review, "numeric diagnostics must not mutate or drop analytical prose")
+
+    def test_only_explicit_open_position_plan_is_carried_forward(self):
+        trades = [
+            {"id": "old", "time": "2026-10-16", "type": "Buy", "symbol": "Held", "code": "600001", "qty": 100,
+             "plan": {"desc": "Wait for confirmation"}},
+            {"id": "active", "time": "2026-10-17", "type": "Buy", "symbol": "Held", "code": "600001", "qty": 100,
+             "plan": {"desc": "Exit below support", "status": "active"}},
+            {"id": "closed", "time": "2026-10-17", "type": "Buy", "symbol": "Closed", "code": "600002", "qty": 100,
+             "plan": {"desc": "Hold", "status": "active"}},
+            {"id": "sell", "time": "2026-10-18", "type": "Sell", "symbol": "Closed", "code": "600002", "qty": 100},
+        ]
+        with tempfile.TemporaryDirectory(dir=storage.DATABASE_PATH.parent) as temporary_directory, \
+                patch.object(storage, "DATABASE_PATH", Path(temporary_directory) / "routing.sqlite3"), \
+                patch("app.today.list_trades", return_value=trades):
+            context = today._trade_review_context("2026-10-19")
+        self.assertEqual([item["trade_id"] for item in context["active_plans"]], ["active"])
+        self.assertEqual(route_trade_review(context)["mode"], "plan_tracking")
+
 
 class SeparateDailyGenerationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_trade_review_saves_only_trade_part_and_filters_unknown_references(self):
+    async def test_fact_based_review_uses_trade_facts_and_can_ask_for_context(self):
         context = {
             "trade_date": "2026-10-18",
             "today_trades": [{"id": "today-1", "symbol": "Test Co"}],
@@ -266,35 +340,98 @@ class SeparateDailyGenerationTests(unittest.IsolatedAsyncioTestCase):
             "evidence_catalog": [{"ref_id": "trade:today-1", "label": "Today", "excerpt": "Saved trade"}],
             "_evidence_by_id": {"trade:today-1": {"ref_id": "trade:today-1", "label": "Today", "excerpt": "Saved trade"}},
         }
-        model_json = json.dumps({
-            "overview": "One trade; motive, plan, and note were not recorded.",
-            "focus_next": ["Record the invalidation condition before the next trade."],
-            "trade_reviews": [{
-                "trade_id": "today-1", "symbol": "Test Co", "review": "There is insufficient evidence to assess adherence.",
-                "evidence_refs": ["trade:today-1", "trade:invented"],
-            }],
-        })
+        model_json = json.dumps({"overview": "当天记录了一笔交易，但现有资料没有说明交易理由。", "trade_reviews": [
+            {"trade_id": "today-1", "symbol": "Test Co", "title": "成交事实明确，决策背景待补充",
+             "review": "成交记录可以确认交易行为，但尚无相关笔记说明这笔交易希望解决什么问题。",
+             "evidence_refs": ["trade:today-1"]}], "questions": ["这笔交易最主要的考虑是什么？"]}, ensure_ascii=False)
         with patch("app.today._trade_review_context", return_value=context), \
-                patch("app.today._market_news_context", new=AsyncMock(return_value={"results": [], "warning": None})), \
-                patch("app.today._deepseek_json", new=AsyncMock(return_value=model_json)), \
+                patch("app.today._deepseek_json", new=AsyncMock(side_effect=[model_json, _audit_response(model_json)])) as narrator, \
                 patch("app.today._save_daily_review_part") as save:
             result = await today.generate_trade_reviews("2026-10-18")
 
         save.assert_called_once()
+        self.assertEqual(narrator.await_count, 2)
         self.assertEqual(save.call_args.args[1], "trades")
         self.assertEqual(result["trade_reviews"][0]["evidence_refs"], ["trade:today-1"])
+        self.assertEqual(result["trade_reviews"][0]["analysis_depth"], "facts_only")
+        self.assertEqual(result["trade_review_questions"], ["这笔交易最主要的考虑是什么？"])
         self.assertEqual(result["trade_review_market_news"], [])
+        self.assertEqual(result["trade_review_trace"]["stages"]["quality_review"]["status"], "passed")
+
+    async def test_empty_day_never_calls_ai(self):
+        context = {"trade_date": "2026-10-18", "today_trades": [], "active_plans": [], "day_note_refs": [],
+                   "record_coverage": {"trade_count": 0}, "evidence_catalog": []}
+        with patch("app.today._trade_review_context", return_value=context), \
+                patch("app.today._deepseek_json", new=AsyncMock()) as narrator, \
+                patch("app.today._save_daily_review_part"):
+            result = await today.generate_trade_reviews("2026-10-18")
+        narrator.assert_not_awaited()
+        self.assertEqual(result["trade_review_mode"], "empty")
+
+    async def test_active_plan_without_trades_is_sent_to_ai_as_an_observation(self):
+        context = {"trade_date": "2026-10-18", "today_trades": [], "active_plans": [
+            {"asset_key": "CN:code:600001", "symbol": "Held", "trade_id": "old", "plan": {"desc": "Wait", "status": "active"}}],
+            "day_note_refs": [], "asset_note_refs": [], "asset_timelines": [], "recent_notes": [],
+            "_evidence_by_id": {}, "record_coverage": {"trade_count": 0}, "evidence_catalog": []}
+        note_json = json.dumps({"overview": "今天没有成交，仍可结合这条持仓观察记录等待条件变化。", "observations": ["Held：继续跟踪记录中的等待条件。"]}, ensure_ascii=False)
+        with patch("app.today._trade_review_context", return_value=context), \
+                patch("app.today._deepseek_json", new=AsyncMock(side_effect=[note_json, _audit_response(note_json)])) as narrator, \
+                patch("app.today._save_daily_review_part"):
+            result = await today.generate_trade_reviews("2026-10-18")
+        self.assertEqual(narrator.await_count, 2)
+        self.assertEqual(result["trade_review_mode"], "plan_tracking")
+        self.assertEqual(result["trade_review_plan_updates"], ["Held：继续跟踪记录中的等待条件。"])
+
+    async def test_mixed_day_keeps_unnoted_trade_fact_only(self):
+        trades = [
+            {"id": "noted", "symbol": "Planned", "type": "Buy", "qty": 10, "price": 12, "currency": "CNY", "plan": {"desc": "Scale in"}, "motive": {"desc": "Breakout"}},
+            {"id": "bare", "symbol": "Bare", "type": "Sell", "qty": 5, "price": 8, "currency": "CNY"},
+        ]
+        evidence = {f"trade:{item['id']}": {"ref_id": f"trade:{item['id']}", "label": item["symbol"],
+                    "excerpt": f"{item['qty']} shares at {item['price']} CNY"} for item in trades}
+        context = {"trade_date": "2026-10-18", "today_trades": trades, "active_plans": [], "trade_record_times": {},
+                   "day_note_refs": [], "record_coverage": {"trade_count": 2}, "evidence_catalog": list(evidence.values()),
+                   "_evidence_by_id": evidence, "asset_timelines": []}
+        model_json = json.dumps({"overview": "Two trades recorded.", "trade_reviews": [
+            {"trade_id": "noted", "symbol": "Planned", "review": "The recorded plan was to scale in.", "evidence_refs": ["trade:noted"]},
+            {"trade_id": "bare", "symbol": "Bare", "title": "Reason not recorded",
+             "review": "The record confirms a sale, but does not establish the reason or whether it matched the user's objective.",
+             "evidence_refs": ["trade:bare"]}], "questions": ["What was the main reason for the Bare sale?"]})
+        with patch("app.today._trade_review_context", return_value=context), \
+                patch("app.today._deepseek_json", new=AsyncMock(side_effect=[model_json, _audit_response(model_json)])), \
+                patch("app.today._save_daily_review_part"):
+            result = await today.generate_trade_reviews("2026-10-18")
+        reviews = {item["trade_id"]: item for item in result["trade_reviews"]}
+        self.assertEqual(result["trade_review_mode"], "execution_review")
+        self.assertEqual(reviews["bare"]["analysis_depth"], "facts_only")
+        self.assertNotIn("impulsive", reviews["bare"]["review"])
+        self.assertEqual(result["trade_review_questions"], ["What was the main reason for the Bare sale?"])
 
     async def test_summary_saves_only_summary_part(self):
-        context = {"trade_date": "2026-10-18", "portfolio_result": {"pnl_by_currency": {"CNY": 12}}, "today_trades": [], "today_notes": []}
+        context = {
+            "trade_date": "2026-10-18", "portfolio_status": "complete", "baseline_date": "2026-10-17",
+            "portfolio_result": {"complete": True, "pnl_by_currency": {"CNY": 12}, "attribution": []},
+            "portfolio_warnings": [], "market_benchmarks": [], "industry_performance": [], "industry_status": "unavailable",
+        }
+        narrative_json = json.dumps({
+            "market_narrative": "市场行情暂不可用。",
+            "portfolio_narrative": "京东方A为当日主要正贡献标的。",
+            "insight": "",
+        }, ensure_ascii=False)
         with patch("app.today._daily_summary_context", new=AsyncMock(return_value=context)), \
-                patch("app.today._deepseek_json", new=AsyncMock(return_value='{"summary":"Portfolio gained CNY 12."}')), \
+                patch("app.today._deepseek_json", new=AsyncMock(return_value=narrative_json)) as narrator, \
                 patch("app.today._save_daily_review_part") as save:
             result = await today.generate_daily_summary("2026-10-18")
 
         save.assert_called_once()
         self.assertEqual(save.call_args.args[1], "summary")
-        self.assertEqual(result["summary"], "Portfolio gained CNY 12.")
+        narrator.assert_awaited_once()
+        self.assertEqual(result["summary_source"], "ai")
+        self.assertEqual(result["summary_brief"]["narrative"]["portfolio_narrative"], "京东方A为当日主要正贡献标的。")
+        self.assertEqual(result["summary_brief"]["portfolio"]["status"], "calculated")
+        self.assertIsNone(result["summary_brief"]["portfolio"]["daily_return_pct"])
+        self.assertEqual(result["summary_facts"]["portfolio_status"], "complete")
+        self.assertEqual(result["summary_version"], today.DAILY_SUMMARY_VERSION)
 
 
 class PortfolioPnlTests(unittest.TestCase):

@@ -29,7 +29,7 @@ type TradeRecord = {
   closeVsFill?: string;
   closeVsFillColor?: string;
   motive?: { posTag?: string; tags?: string[]; desc?: string };
-  plan?: { tp?: number | string; sl?: number | string; desc?: string };
+  plan?: { tp?: number | string; sl?: number | string; desc?: string; status?: 'active' | 'completed' | 'cancelled'; valid_until?: string };
   modifiedAt?: string;
 };
 
@@ -197,7 +197,7 @@ export default function TradesModule({ isCard = false, tradeDate, view = 'day' }
       closeVsFill: editingTrade?.closeVsFill || '--',
       closeVsFillColor: editingTrade?.closeVsFillColor || 'text-slate-400',
       motive: { posTag: data.posTag, tags: data.tags, desc: data.motiveDesc },
-      plan: { tp: data.tp || undefined, sl: data.sl || undefined, desc: data.planDesc },
+      plan: { tp: data.tp || undefined, sl: data.sl || undefined, desc: data.planDesc, status: data.planStatus || undefined, valid_until: data.planValidUntil || undefined },
       modifiedAt: editingTrade ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
     };
 

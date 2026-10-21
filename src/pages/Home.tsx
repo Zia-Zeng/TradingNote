@@ -38,8 +38,6 @@ export default function Home() {
   const [calendarMonth, setCalendarMonth] = useState(() => new Date(`${selectedDate.slice(0, 7)}-01T00:00:00`));
   const [showCalendarFilter, setShowCalendarFilter] = useState(false);
   const [dailyReview, setDailyReview] = useState<DailyReview | null>(null);
-  const [summaryStale, setSummaryStale] = useState(false);
-  const [tradeReviewsStale, setTradeReviewsStale] = useState(false);
   const [reviewLoading, setReviewLoading] = useState(true);
   const [summaryGenerating, setSummaryGenerating] = useState(false);
   const [tradeReviewsGenerating, setTradeReviewsGenerating] = useState(false);
@@ -72,9 +70,24 @@ export default function Home() {
   };
 
   const selectDate = (date: string) => {
+    if (date === selectedDate) {
+      setReviewLoading(true);
+      setReviewError('');
+      getDailyReview(date)
+        .then(setDailyReview)
+        .catch(error => setReviewError(error instanceof Error ? error.message : 'Unable to load this day\'s AI review.'))
+        .finally(() => setReviewLoading(false));
+      return;
+    }
     const next = new URLSearchParams(searchParams);
     next.set('date', date);
     setSearchParams(next);
+  };
+
+  const backToToday = () => {
+    const today = localDate();
+    setCalendarMonth(new Date(`${today.slice(0, 7)}-01T00:00:00`));
+    selectDate(today);
   };
 
   const selectedDateLabel = new Date(`${selectedDate}T00:00:00`).toLocaleDateString('en-US', {
@@ -82,7 +95,7 @@ export default function Home() {
   });
 
   const openDailyAgent = () => {
-    const prompt = `请结合 ${selectedDate} 的交易、Motive、Plan、Notes 和历史关联记录，陪我做一次本日复盘。重点检查计划与执行是否一致、哪些判断需要继续验证，以及下一步值得关注什么。请引用具体记录；没有证据的地方明确说明，不要给买卖建议。`;
+    const prompt = `请结合 ${selectedDate} 的交易、Motive、Plan、Notes 和历史关联记录，陪我做一次本日复盘。综合交易理由与执行情况，判断哪些决策合理、哪些值得商榷，以及有哪些结论值得继续验证。请引用具体记录；没有证据的地方明确说明，不要给买卖建议。`;
     navigate(`/agent?ref=daily-${selectedDate}&prompt=${encodeURIComponent(prompt)}`);
   };
 
@@ -94,23 +107,29 @@ export default function Home() {
     let active = true;
     setReviewLoading(true);
     setDailyReview(null);
-    setSummaryStale(false);
-    setTradeReviewsStale(false);
     setTradeReviewError('');
     setReviewError('');
     getDailyReview(selectedDate)
       .then(result => { if (active) setDailyReview(result); })
-      .catch(error => { if (active) setReviewError(error instanceof Error ? error.message : 'Unable to load this day\'s AI review.'); })
+      .catch(error => {
+        if (active) {
+          const message = error instanceof Error ? error.message : 'Unable to load this day\'s review.';
+          setReviewError(message);
+          setTradeReviewError(message);
+        }
+      })
       .finally(() => { if (active) setReviewLoading(false); });
     return () => { active = false; };
   }, [selectedDate]);
 
   useEffect(() => {
     const handleInputsChanged = (event: Event) => {
-      const changedDate = (event as CustomEvent<{ date: string }>).detail?.date;
+      const detail = (event as CustomEvent<{ date: string; kind?: 'trade' | 'note' }>).detail;
+      const changedDate = detail?.date;
       if (changedDate === selectedDate) {
-        setSummaryStale(true);
-        setTradeReviewsStale(true);
+        void getDailyReview(selectedDate)
+          .then(setDailyReview)
+          .catch(error => setTradeReviewError(error instanceof Error ? error.message : 'Unable to refresh trade records.'));
       }
     };
     window.addEventListener(DAILY_REVIEW_INPUTS_CHANGED, handleInputsChanged);
@@ -122,7 +141,6 @@ export default function Home() {
     setReviewError('');
     try {
       setDailyReview(await generateDailySummary(selectedDate));
-      setSummaryStale(false);
     } catch (error) {
       setReviewError(error instanceof Error ? error.message : 'Daily summary generation failed. Please retry.');
     } finally {
@@ -135,7 +153,6 @@ export default function Home() {
     setTradeReviewError('');
     try {
       setDailyReview(await generateTradeReviews(selectedDate));
-      setTradeReviewsStale(false);
     } catch (error) {
       setTradeReviewError(error instanceof Error ? error.message : 'Trade review generation failed. Please retry.');
     } finally {
@@ -143,8 +160,20 @@ export default function Home() {
     }
   };
 
-  const showTradeReviews = () => document.getElementById('daily-trade-review')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  const handleReloadTradeReview = async () => {
+    setReviewLoading(true);
+    setTradeReviewError('');
+    try {
+      setDailyReview(await getDailyReview(selectedDate));
+    } catch (error) {
+      setTradeReviewError(error instanceof Error ? error.message : 'Unable to load this day\'s review.');
+    } finally {
+      setReviewLoading(false);
+    }
+  };
+
   const tradeReviewEvidence = new Map((dailyReview?.trade_review_evidence || []).map(item => [item.ref_id, item]));
+  const formatBriefAmount = (amount: number, currency: string) => `${amount > 0 ? '+' : ''}${currency} ${amount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   useEffect(() => {
     if (onboardParam === '1') setOnboardingStep(1);
@@ -248,28 +277,6 @@ export default function Home() {
   }, [monthKey, todayDate, todayMonthKey]);
 
   const pnlByDate = new Map((portfolioPnl?.days || []).map(item => [item.date, item]));
-  const monthPnlEntries = Object.entries(portfolioPnl?.month_summary?.pnl_by_currency || {});
-  const monthPnlLabel = monthPnlEntries.length
-    ? monthPnlEntries.map(([currency, value]) => formatPnl(value, currency)).join(' · ')
-    : '—';
-  const monthPnlTone = portfolioPnlError
-    ? 'border-rose-100 bg-rose-50 text-rose-600'
-    : portfolioPnlLoading
-      ? 'border-slate-100 bg-slate-50 text-slate-400'
-      : monthPnlEntries.some(([, value]) => value > 0) && !monthPnlEntries.some(([, value]) => value < 0)
-        ? 'border-emerald-100 bg-emerald-50 text-emerald-600'
-        : monthPnlEntries.some(([, value]) => value < 0) && !monthPnlEntries.some(([, value]) => value > 0)
-          ? 'border-rose-100 bg-rose-50 text-rose-600'
-          : 'border-slate-100 bg-slate-50 text-[#0B2545]';
-  const pnlStatus = portfolioPnlLoading
-    ? 'Calculating daily P&L…'
-    : portfolioPnlError
-      ? portfolioPnlError
-      : [
-          ...(portfolioPnl?.warnings || []).slice(0, 2),
-          ...(portfolioPnl?.incomplete_dates?.length ? [`Partial P&L is shown where possible; ${portfolioPnl.incomplete_dates.length} trading day(s) have missing prices.`] : []),
-        ].join(' ')
-          || 'Based on uploaded positions and trades only. Original currencies are kept.';
 
   return (
     <div className="w-full min-h-full pb-[80px] bg-[#F8F9FA]">
@@ -318,12 +325,7 @@ export default function Home() {
             <div className="flex justify-between items-center gap-2 mb-1.5 ml-1">
               <div className="flex min-w-0 items-center gap-1.5">
                 <h2 className="shrink-0 text-[14px] font-bold text-[#0B2545] tracking-tight">Trading Calendar</h2>
-                <span
-                  title={pnlStatus}
-                  className={cn("min-w-0 max-w-[96px] truncate rounded-full border px-1.5 py-0.5 text-[8px] font-bold font-mono", monthPnlTone)}
-                >
-                  {portfolioPnlLoading ? 'MTD …' : `MTD ${monthPnlLabel}`}
-                </span>
+                <button type="button" onClick={backToToday} className="shrink-0 whitespace-nowrap rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[8px] font-bold text-[#0B2545] hover:border-[#EE6C4D] hover:text-[#EE6C4D]">Back to today</button>
               </div>
               <div className="flex items-center gap-1.5 bg-slate-50/80 backdrop-blur-sm border border-slate-100/80 rounded-lg px-2 py-1 shadow-sm">
                 <button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))} aria-label="Previous month" className="text-slate-400 hover:text-slate-600 active:scale-95 transition-transform">
@@ -352,7 +354,7 @@ export default function Home() {
                   }}
                   className="min-w-0 bg-white border border-slate-200 rounded-md px-1.5 py-1 text-[9px] text-slate-600"
                 />
-                <span className="text-[9px] text-slate-400">{portfolioPnlLoading ? 'Calculating…' : portfolioPnl?.baseline_date ? `Since ${portfolioPnl.baseline_date}` : 'Snapshot required'}</span>
+                <span title={portfolioPnlError || undefined} className="text-[9px] text-slate-400">{portfolioPnlError ? 'P&L unavailable' : portfolioPnlLoading ? 'Calculating…' : portfolioPnl?.baseline_date ? `Since ${portfolioPnl.baseline_date}` : 'Snapshot required'}</span>
               </div>
             )}
             
@@ -386,11 +388,12 @@ export default function Home() {
                 return (
                   <button
                     key={day}
+                    type="button"
                     onClick={() => selectDate(dayKey)}
                     className={cn(
-                      "h-9 min-w-0 rounded-lg px-0.5 flex flex-col items-center justify-center gap-0.5 leading-none transition-colors",
+                      "h-9 min-w-0 cursor-pointer rounded-lg px-0.5 flex flex-col items-center justify-center gap-0.5 leading-none transition-colors active:scale-95",
                       pnlCellTone,
-                      isSelected && "ring-1 ring-[#EE6C4D] shadow-sm cursor-pointer active:scale-95"
+                      isSelected && "ring-1 ring-[#EE6C4D] shadow-sm"
                     )}
                   >
                     <span className="text-[8px] font-bold">{day}</span>
@@ -414,7 +417,7 @@ export default function Home() {
             
             <div className="flex items-center justify-between gap-2 mb-1.5 relative z-10">
               <h2 className="text-[14px] font-bold text-[#0B2545] tracking-tight flex items-center gap-1.5">
-                <Sparkles size={14} className="text-[#EE6C4D]" /> Daily Summary
+                <Sparkles size={14} className="text-[#EE6C4D]" /> 市场与组合日评
               </h2>
               <button
                 onClick={() => void handleGenerateSummary()}
@@ -422,61 +425,49 @@ export default function Home() {
                 className="bg-[#0B2545] hover:bg-[#134074] active:scale-95 text-white px-2.5 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1.5 transition-all shadow-sm disabled:opacity-60"
               >
                 {summaryGenerating ? <RefreshCw size={11} className="animate-spin" /> : dailyReview?.summary ? <RefreshCw size={11} /> : <Sparkles size={11} />}
-                {summaryGenerating ? 'Analyzing…' : dailyReview?.summary ? 'Regenerate' : 'Generate'}
+                {summaryGenerating ? '生成中…' : dailyReview?.summary_brief ? '重新生成' : '生成日评'}
               </button>
             </div>
             
             <div className="bg-[#0B2545]/[0.03] p-2 rounded-lg border border-[#0B2545]/10 relative z-10">
               <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">{selectedDateLabel}</div>
-              {reviewLoading ? <p className="text-[11px] text-slate-400">Loading saved review…</p> : dailyReview?.summary ? (
+              {reviewLoading ? <p className="text-[11px] text-slate-400">正在加载日评…</p> : dailyReview?.summary_brief ? (
                 <>
-                  {dailyReview.summary_facts && (() => {
-                    const facts = dailyReview.summary_facts;
-                    const result = facts.portfolio_result;
-                    const pnlEntries = result?.complete ? Object.entries(result.pnl_by_currency ?? {}) : [];
-                    const movers = (result?.attribution ?? []).slice(0, 3);
-                    const benchmarks = facts.market_benchmarks ?? [];
-                    return (
-                      <div className="mb-2 space-y-1.5 border-b border-[#0B2545]/10 pb-2">
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px]">
-                          <span className="font-bold text-slate-500">Portfolio</span>
-                          {pnlEntries.length ? pnlEntries.map(([currency, value]) => (
-                            <span key={currency} className={cn('font-mono font-bold', value > 0 ? 'text-emerald-600' : value < 0 ? 'text-rose-600' : 'text-slate-600')}>{formatPnl(value, currency)}</span>
-                          )) : <span className="text-amber-700">P&amp;L unavailable or incomplete</span>}
-                        </div>
-                        {movers.length > 0 && <div className="flex flex-wrap gap-x-3 gap-y-1 text-[9px] text-slate-600">
-                          <span className="font-bold text-slate-500">Top contributors / drags</span>
-                          {movers.map((item) => <span key={`${item.market}-${item.code}`} className="font-mono">{item.symbol} {formatPnl(item.pnl, item.currency, true)}{item.change_pct != null ? ` (${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%)` : ''}</span>)}
-                        </div>}
-                        {benchmarks.length > 0 && <div className="flex flex-wrap gap-x-3 gap-y-1 text-[9px] text-slate-600">
-                          <span className="font-bold text-slate-500">Market</span>
-                          {benchmarks.map((item) => <span key={item.market}>{item.name} {item.change_pct == null ? 'unavailable' : `${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`}</span>)}
-                        </div>}
-                        {(facts.market_news?.length ?? 0) > 0 && <div className="space-y-1 border-t border-[#0B2545]/10 pt-1.5">
-                          <span className="font-bold text-slate-500">External context · Tavily</span>
-                          {facts.market_news?.slice(0, 3).map((item) => <div key={item.url} className="text-[9px] leading-relaxed text-slate-600">
-                            <a href={item.url} target="_blank" rel="noreferrer" className="font-semibold text-[#134074] underline decoration-slate-300 underline-offset-2">{item.title}</a>
-                            <span className="ml-1 text-slate-400">{item.source}{item.published_date ? ` · ${item.published_date}` : ''}</span>
-                            <p className="line-clamp-2 text-slate-500">{item.snippet}</p>
-                          </div>)}
-                        </div>}
-                        {!facts.market_news?.length && facts.market_news_warning && <p className="text-[9px] text-amber-700">External news context unavailable: {facts.market_news_warning}</p>}
-                        {facts.portfolio_warnings?.[0] && <p className="text-[9px] text-amber-700">{facts.portfolio_warnings[0]}</p>}
-                      </div>
-                    );
-                  })()}
-                  <p className="text-[11px] font-semibold leading-relaxed text-[#134074]">{dailyReview.summary}</p>
-                  {summaryStale && <p className="mt-1 text-[9px] font-medium text-amber-700">Trades or notes changed. Regenerate this summary.</p>}
-                  {(dailyReview.trade_reviews?.length ?? 0) > 0 && <button onClick={showTradeReviews} className="mt-1.5 text-[10px] font-bold text-[#EE6C4D]">View trade review ↓</button>}
+                  <div className="space-y-2.5">
+                    <section>
+                      <h3 className="mb-0.5 text-[11px] font-bold text-[#0B2545]">市场表现</h3>
+                      <p className="text-[11px] leading-relaxed text-[#134074]">{dailyReview.summary_brief.market.text}</p>
+                      {dailyReview.summary_brief.narrative?.market_narrative && <p className="mt-1 text-[11px] leading-relaxed text-slate-600">{dailyReview.summary_brief.narrative.market_narrative}</p>}
+                    </section>
+                    <section>
+                      <h3 className="mb-0.5 text-[11px] font-bold text-[#0B2545]">组合表现</h3>
+                      {dailyReview.summary_brief.portfolio.amounts.length > 0 && (
+                        <p className="text-[13px] font-bold text-[#0B2545]">
+                          {dailyReview.summary_brief.portfolio.amounts.map(item => formatBriefAmount(item.amount, item.currency)).join(' ｜ ')}
+                        </p>
+                      )}
+                      {dailyReview.summary_brief.narrative?.portfolio_narrative && <p className="mt-1 text-[11px] leading-relaxed text-slate-600">{dailyReview.summary_brief.narrative.portfolio_narrative}</p>}
+                    </section>
+                    {(dailyReview.summary_brief.winners.length > 0 || dailyReview.summary_brief.losers.length > 0) && (
+                      <section>
+                        <h3 className="mb-0.5 text-[11px] font-bold text-[#0B2545]">主要贡献与拖累</h3>
+                        {dailyReview.summary_brief.winners.length > 0 && <p className="text-[11px] leading-relaxed text-emerald-700">正贡献：{dailyReview.summary_brief.winners.map(item => `${item.name} ${formatBriefAmount(item.amount, item.currency)}`).join('、')}</p>}
+                        {dailyReview.summary_brief.losers.length > 0 && <p className="text-[11px] leading-relaxed text-rose-700">负贡献：{dailyReview.summary_brief.losers.map(item => `${item.name} ${formatBriefAmount(item.amount, item.currency)}`).join('、')}</p>}
+                      </section>
+                    )}
+                  </div>
+                  {dailyReview.summary_brief.narrative?.insight && <p className="mt-2 text-[11px] leading-relaxed text-[#134074]">{dailyReview.summary_brief.narrative.insight}</p>}
                 </>
-              ) : <p className="text-[11px] text-slate-400">Generate an evidence-based review of this day’s execution.</p>}
+              ) : <p className="text-[11px] text-slate-400">{dailyReview?.summary ? '已有旧版摘要。请重新生成结构化日评。' : '生成该日的市场与持仓日评。'}</p>}
               {reviewError && <p role="alert" className="mt-1.5 text-[10px] text-rose-600">{reviewError}</p>}
             </div>
           </div>
         </div>
 
         {/* Trades Module (Migrated from Daily Review) */}
-        <TradesModule isCard={true} tradeDate={selectedDate} view="day" />
+        <div id="daily-trades" className="scroll-mt-20">
+          <TradesModule isCard={true} tradeDate={selectedDate} view="day" />
+        </div>
 
         {/* My Notes Module */}
         <div id="notes-module" className="pt-1.5 pb-1 relative z-10">
@@ -544,51 +535,23 @@ export default function Home() {
                 <h2 className="flex items-center gap-1.5 text-[13px] font-bold text-[#0B2545]"><Sparkles size={13} className="text-[#EE6C4D]" /> Trade Review</h2>
                 <span className="text-[9px] font-mono text-slate-400">{selectedDateLabel}</span>
               </div>
-              {reviewLoading ? <p className="mb-2 text-[10px] text-slate-400">Loading trade review…</p> : dailyReview?.trade_count === 0 ? <p className="mb-2 text-[10px] leading-relaxed text-slate-500">{dailyReview.trade_review_overview || 'No trades are recorded for this date. Generate will confirm that a trade review cannot be produced without trade records.'}</p> : null}
+              {reviewLoading ? <p className="mb-2 text-[10px] text-slate-400">Loading trade review…</p> : !dailyReview ? <p className="mb-2 text-[10px] leading-relaxed text-amber-700">Trade data is pending sync. The review mode cannot be determined yet.</p> : dailyReview.trade_review_mode === 'empty' && !dailyReview.trade_reviews_generated_at ? <p className="mb-2 text-[10px] leading-relaxed text-slate-500">No trades or relevant notes today. Generate a no-trade review to record this day's status.</p> : null}
               {(dailyReview?.trade_count ?? 0) > 0 && dailyReview?.trade_review_stats && (
-                <>
-                <div className="mb-1.5 grid grid-cols-4 gap-1.5">
-                  {[
-                    ['Trades', dailyReview.trade_review_stats.trade_count],
-                    ['Motive', `${dailyReview.trade_review_stats.motive_count}/${dailyReview.trade_review_stats.trade_count}`],
-                    ['Plan', `${dailyReview.trade_review_stats.plan_count}/${dailyReview.trade_review_stats.trade_count}`],
-                    ['Notes', `${dailyReview.trade_review_stats.trade_note_count}/${dailyReview.trade_review_stats.trade_count}`],
-                  ].map(([label, value]) => (
-                    <div key={label} className="rounded-lg border border-slate-100 bg-slate-50 px-1.5 py-2 text-center">
-                      <div className="font-mono text-[12px] font-bold text-[#0B2545]">{value}</div>
-                      <div className="mt-0.5 text-[8px] font-bold uppercase tracking-wide text-slate-400">{label}</div>
-                    </div>
-                  ))}
-                </div>
-                <p className="mb-2.5 text-right text-[8px] text-slate-400">Daily notes recorded: {dailyReview.trade_review_stats.daily_note_count}</p>
-                </>
+                <p className="mb-2 text-[9px] text-slate-400">{dailyReview.trade_review_stats.trade_count} trade(s) reviewed · Earlier trades and relevant notes included when available</p>
               )}
-              {dailyReview?.trade_count !== 0 && dailyReview?.trade_review_overview && (
+              {dailyReview?.trade_review_overview && (dailyReview.trade_review_mode !== 'empty' || dailyReview.trade_reviews_generated_at) && (
                 <div className="mb-2.5 rounded-lg border border-[#0B2545]/10 bg-[#0B2545]/[0.03] p-2.5">
-                  <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Execution conclusion</div>
+                  <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Daily trade assessment</div>
                   <p className="text-[11px] font-medium leading-relaxed text-[#134074]">{dailyReview.trade_review_overview}</p>
                 </div>
               )}
-              {(dailyReview?.trade_review_market_news?.length ?? 0) > 0 && (
-                <div className="mb-2.5 rounded-lg border border-sky-100 bg-sky-50/60 p-2.5">
-                  <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-sky-800">External market context · Tavily</div>
-                  <div className="space-y-1.5">
-                    {dailyReview?.trade_review_market_news?.slice(0, 3).map((item) => <div key={item.url} className="text-[9px] leading-relaxed text-slate-600">
-                      <a href={item.url} target="_blank" rel="noreferrer" className="font-semibold text-[#134074] underline decoration-slate-300 underline-offset-2">{item.title}</a>
-                      <span className="ml-1 text-slate-400">{item.source}{item.published_date ? ` · ${item.published_date}` : ''}</span>
-                      <p className="line-clamp-2 text-slate-500">{item.snippet}</p>
-                    </div>)}
-                  </div>
-                </div>
-              )}
-              {!dailyReview?.trade_review_market_news?.length && dailyReview?.trade_count !== 0 && dailyReview?.trade_review_market_news_warning && (
-                <p className="mb-2.5 text-[9px] text-amber-700">External news context unavailable: {dailyReview.trade_review_market_news_warning}</p>
-              )}
+              {dailyReview?.trade_review_observations?.length ? <div className="mb-2.5 space-y-1 rounded-lg border border-slate-100 bg-slate-50 p-2.5">{dailyReview.trade_review_observations.map((item, index) => <p key={index} className="text-[11px] leading-relaxed text-slate-600">{item}</p>)}</div> : null}
               {dailyReview?.trade_reviews?.length ? <div className="space-y-2">
                 {dailyReview.trade_reviews.map(item => (
                   <div key={item.trade_id} className="rounded-lg border border-slate-100 bg-slate-50 p-2.5">
-                    <div className="mb-1 text-[11px] font-bold text-[#0B2545]">{item.symbol}</div>
+                    <div className="mb-1 text-[11px] font-bold text-[#0B2545]">{item.symbol}{item.title ? <span className="font-semibold"> · {item.title}</span> : null}</div>
                     <p className="text-[11px] leading-relaxed text-slate-600">{item.review}</p>
+                    {item.follow_up_question && <p className="mt-1.5 text-[10px] font-medium text-[#134074]">To complete the review: {item.follow_up_question}</p>}
                     {item.evidence_refs?.length > 0 && (
                       <div className="mt-2 space-y-1 border-t border-slate-200/70 pt-1.5">
                         {item.evidence_refs.map(refId => {
@@ -604,23 +567,28 @@ export default function Home() {
                     )}
                   </div>
                 ))}
-              </div> : dailyReview?.trade_count !== 0 && <p className="mb-2 text-[10px] text-slate-500">No trade review generated for this day yet.</p>}
-              {(dailyReview?.trade_review_focus?.length ?? 0) > 0 && (
-                <div className="mt-2.5 rounded-lg border border-amber-100 bg-amber-50/70 p-2.5">
-                  <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-amber-700">Focus next</div>
-                  <ul className="space-y-1 text-[10px] leading-relaxed text-amber-900">
-                    {dailyReview?.trade_review_focus?.map((item, index) => <li key={`${index}-${item}`}>• {item}</li>)}
-                  </ul>
-                </div>
-              )}
+              </div> : dailyReview && dailyReview.trade_review_mode !== 'empty' && !dailyReview.trade_review_overview && <p className="mb-2 text-[10px] text-slate-500">No review generated for this day yet.</p>}
+              {dailyReview?.trade_review_questions?.length ? <div className="mt-2.5 rounded-lg border border-amber-100 bg-amber-50/70 p-2.5">
+                <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-amber-800">Questions to confirm</div>
+                {dailyReview.trade_review_questions.slice(0, 2).map((question, index) => <p key={index} className="text-[10px] leading-relaxed text-slate-700">{question}</p>)}
+              </div> : null}
               <div className="flex items-center justify-between gap-2">
-                {tradeReviewsStale && <p className="text-[9px] font-medium text-amber-700">Trades or notes changed. Regenerate this review.</p>}
                 {tradeReviewError && <p role="alert" className="text-[9px] text-rose-600">{tradeReviewError}</p>}
-                <button onClick={() => void handleGenerateTradeReviews()} disabled={reviewLoading || tradeReviewsGenerating} className="ml-auto rounded-lg bg-[#0B2545] px-2.5 py-1.5 text-[10px] font-bold text-white disabled:opacity-60">
-                  {tradeReviewsGenerating ? 'Analyzing…' : dailyReview?.trade_reviews?.length ? 'Regenerate' : 'Generate trade review'}
-                </button>
+                {!dailyReview ? tradeReviewError ? (
+                  <button type="button" onClick={() => void handleReloadTradeReview()} disabled={reviewLoading} className="ml-auto rounded-lg bg-[#0B2545] px-2.5 py-1.5 text-[10px] font-bold text-white disabled:opacity-60">
+                    {reviewLoading ? 'Loading…' : 'Retry loading'}
+                  </button>
+                ) : null : dailyReview.trade_review_mode === 'empty' ? (
+                  <button type="button" onClick={() => void handleGenerateTradeReviews()} disabled={reviewLoading || tradeReviewsGenerating} className="ml-auto rounded-lg bg-[#0B2545] px-2.5 py-1.5 text-[10px] font-bold text-white disabled:opacity-60">
+                    {tradeReviewsGenerating ? 'Analyzing…' : dailyReview.trade_reviews_generated_at ? 'Regenerate' : 'Generate trade review'}
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => void handleGenerateTradeReviews()} disabled={reviewLoading || tradeReviewsGenerating} className="ml-auto rounded-lg bg-[#0B2545] px-2.5 py-1.5 text-[10px] font-bold text-white disabled:opacity-60">
+                    {tradeReviewsGenerating ? 'Analyzing…' : dailyReview?.trade_reviews_generated_at ? 'Regenerate' : dailyReview?.trade_review_mode === 'plan_tracking' ? 'Review notes' : 'Generate trade review'}
+                  </button>
+                )}
               </div>
-              {dailyReview?.trade_reviews_generated_at && <p className="mt-2 text-right text-[9px] text-slate-400">Generated {new Date(dailyReview.trade_reviews_generated_at).toLocaleString('en-US')}</p>}
+              {dailyReview?.trade_review_mode !== 'empty' && dailyReview?.trade_reviews_generated_at && <p className="mt-2 text-right text-[9px] text-slate-400">Generated {new Date(dailyReview.trade_reviews_generated_at).toLocaleString('en-US')}</p>}
             </div>
           </div>
         }

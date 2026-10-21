@@ -81,6 +81,7 @@ def roll_portfolio(
     days: list[dict[str, Any]] = []
     missing_dates: list[str] = []
     last_daily_unrealized: dict[str, float] = {}
+    last_unrealized_by_key: dict[tuple[str, str, str], float] = {}
     realized_to_date: dict[str, float] = {}
     # Establish the starting unrealized P&L at baseline, so the first reported
     # day is a change rather than the accumulated gain since purchase.
@@ -88,12 +89,15 @@ def roll_portfolio(
         close = position.get("last_close")
         if close is not None:
             ccy = key[1]
-            last_daily_unrealized[ccy] = last_daily_unrealized.get(ccy, 0.0) + float(position["quantity"]) * (float(close) - float(position["average_cost"]))
+            unrealized = float(position["quantity"]) * (float(close) - float(position["average_cost"]))
+            last_unrealized_by_key[key] = unrealized
+            last_daily_unrealized[ccy] = last_daily_unrealized.get(ccy, 0.0) + unrealized
 
     for day in session_dates:
         if day <= baseline_date:
             continue
         realized: dict[str, float] = {}
+        realized_by_key: dict[tuple[str, str, str], float] = {}
         for trade in trades_by_date.get(day, []):
             key = _key(trade)
             position = positions.setdefault(key, {"symbol": trade.get("symbol") or key[2], "code": trade.get("code") or key[2], "market": key[0], "currency": key[1], "quantity": 0.0, "average_cost": 0.0, "last_close": None})
@@ -111,7 +115,9 @@ def roll_portfolio(
                 old_qty = float(position["quantity"])
                 sold = min(qty, old_qty)
                 allocated_fee = fee * sold / qty if qty else 0.0
-                realized[ccy] = realized.get(ccy, 0.0) + sold * (price - float(position["average_cost"])) - allocated_fee
+                realized_pnl = sold * (price - float(position["average_cost"])) - allocated_fee
+                realized[ccy] = realized.get(ccy, 0.0) + realized_pnl
+                realized_by_key[key] = realized_by_key.get(key, 0.0) + realized_pnl
                 position["quantity"] = old_qty - sold
                 if position["quantity"] <= 1e-10:
                     position["quantity"] = 0.0
@@ -119,24 +125,35 @@ def roll_portfolio(
                 cash[ccy] = cash.get(ccy, 0.0) + gross_amount - fee
 
         day_unrealized: dict[str, float] = {}
+        day_unrealized_by_key: dict[tuple[str, str, str], float] = {}
         held_value: dict[str, float] = {}
         complete = True
         position_rows = []
+        attribution = []
         for key, position in positions.items():
             qty = float(position["quantity"])
-            close = closes.get(key, {}).get(day)
+            current_close = closes.get(key, {}).get(day)
+            previous_close = position.get("last_close")
+            close = current_close
             if close is None:
                 if qty:
                     complete = False
                 close = position.get("last_close")
             else:
                 position["last_close"] = close
+            if close is None and not qty and (abs(last_unrealized_by_key.get(key, 0.0)) > 1e-10 or key in realized_by_key):
+                day_unrealized_by_key[key] = 0.0
+                attribution.append({"symbol": position["symbol"], "code": position["code"], "market": key[0], "currency": key[1], "pnl": round(realized_by_key.get(key, 0.0) - last_unrealized_by_key.get(key, 0.0), 4), "close": None, "previous_close": float(previous_close) if previous_close is not None else None, "change_pct": None})
             if close is None:
                 continue
             value = qty * float(close)
             unrealized = qty * (float(close) - float(position["average_cost"]))
+            day_unrealized_by_key[key] = unrealized
             held_value[key[1]] = held_value.get(key[1], 0.0) + value
             day_unrealized[key[1]] = day_unrealized.get(key[1], 0.0) + unrealized
+            instrument_pnl = realized_by_key.get(key, 0.0) + unrealized - last_unrealized_by_key.get(key, 0.0)
+            if qty or abs(last_unrealized_by_key.get(key, 0.0)) > 1e-10 or key in realized_by_key:
+                attribution.append({"symbol": position["symbol"], "code": position["code"], "market": key[0], "currency": key[1], "pnl": round(instrument_pnl, 4), "close": float(close), "previous_close": float(previous_close) if previous_close is not None else None, "change_pct": round((float(current_close) / float(previous_close) - 1) * 100, 4) if current_close is not None and previous_close else None})
             if qty:
                 position_rows.append({"symbol": position["symbol"], "code": position["code"], "market": key[0], "currency": key[1], "quantity": qty, "average_cost": round(float(position["average_cost"]), 8), "close": float(close), "market_value": round(value, 4), "unrealized_pnl": round(unrealized, 4)})
 
@@ -148,7 +165,8 @@ def roll_portfolio(
         if not complete:
             missing_dates.append(day)
         state = {"date": day, "cash_by_currency": {k: round(v, 4) for k, v in sorted(cash.items())}, "holdings_market_value_by_currency": {k: round(v, 4) for k, v in sorted(held_value.items())}, "total_assets_by_currency": {k: round(v, 4) for k, v in sorted(state_assets.items())}, "total_assets_complete": total_assets_complete, "realized_pnl_by_currency": {k: round(v, 4) for k, v in sorted(realized.items())}, "realized_pnl_to_date_by_currency": {k: round(v, 4) for k, v in sorted(realized_to_date.items())}, "unrealized_pnl_by_currency": {k: round(v, 4) for k, v in sorted(day_unrealized.items())}, "holding_pnl_by_currency": {k: round(realized_to_date.get(k, 0.0) + day_unrealized.get(k, 0.0), 4) for k in sorted(set(realized_to_date) | set(day_unrealized))}, "positions": position_rows, "complete": complete}
-        days.append({**state, "pnl_by_currency": {k: round(v, 4) for k, v in sorted(pnl.items())}, "daily_state": state})
+        days.append({**state, "pnl_by_currency": {k: round(v, 4) for k, v in sorted(pnl.items())}, "attribution": sorted(attribution, key=lambda item: abs(item["pnl"]), reverse=True), "daily_state": state})
         last_daily_unrealized = day_unrealized
+        last_unrealized_by_key = day_unrealized_by_key
 
     return {"baseline_date": baseline_date, "days": days, "incomplete_dates": missing_dates, "warnings": ["Daily P&L includes realized P&L on sells and the daily change in unrealized P&L. Moving weighted-average cost includes explicitly recorded trade fees; absent fees are treated as zero. Taxes and corporate actions are excluded."]}

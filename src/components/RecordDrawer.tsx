@@ -52,6 +52,8 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onS
   const [customTags, setCustomTags] = useState<string[]>([]);
   const [newTag, setNewTag] = useState('');
   const [planDesc, setPlanDesc] = useState('');
+  const [planStatus, setPlanStatus] = useState('');
+  const [planValidUntil, setPlanValidUntil] = useState('');
   const [motiveDesc, setMotiveDesc] = useState('');
   const [tp, setTp] = useState('');
   const [sl, setSl] = useState('');
@@ -99,6 +101,8 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onS
       setTradeClock(tradeDateTime.time);
       setDirection(initialData.type === 'Sell' ? 'Sell' : 'Buy');
       setPrice(initialData.price || '');
+      setPlanStatus(initialData.plan?.status || '');
+      setPlanValidUntil(initialData.plan?.valid_until || '');
       setQty(initialData.qty || '');
       setPosTag(initialData.motive?.posTag || 'Close');
       setTags(initialData.motive?.tags || []);
@@ -112,7 +116,7 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onS
       setActiveTab('manual');
     } else {
       setSymbol(''); setCode(''); setMarket('CN'); setCurrency('CNY'); setAssetClass('Stock'); setTradeDate(defaultTradeDate || currentLocalDate()); setTradeClock(''); setPrice(''); setQty(''); setTags([]); setCustomTags([]); setNewTag('');
-      setTp(''); setSl(''); setPlanDesc(''); setMotiveDesc(''); setPosTag('Close'); setDirection('Buy');
+      setTp(''); setSl(''); setPlanDesc(''); setPlanStatus(''); setPlanValidUntil(''); setMotiveDesc(''); setPosTag('Close'); setDirection('Buy');
       setActiveTab(defaultTab);
     }
   }, [initialData, isOpen, defaultTab, defaultTradeDate]);
@@ -163,7 +167,7 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onS
       return;
     }
     const data = {
-      symbol, code: code || undefined, market, currency: originalCurrency, assetClass, tradeDate, tradeClock, direction, price, qty, posTag, tags, tp, sl, planDesc, motiveDesc
+      symbol, code: code || undefined, market, currency: originalCurrency, assetClass, tradeDate, tradeClock, direction, price, qty, posTag, tags, tp, sl, planDesc, planStatus, planValidUntil, motiveDesc
     };
     setIsSaving(true);
     try {
@@ -364,6 +368,13 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onS
                       placeholder="Plan details (e.g. strict exit on 5-day MA break)..."
                       className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-[12px] min-h-[60px] focus:outline-none focus:border-[#EE6C4D] resize-none shadow-sm placeholder:text-slate-400 text-[#0B2545]"
                     />
+                    <div className="mt-2 flex gap-2">
+                      <select value={planStatus} onChange={e => setPlanStatus(e.target.value)} aria-label="Plan status" className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white p-2 text-[11px] text-[#0B2545]">
+                        <option value="">No ongoing status</option><option value="active">Active plan</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option>
+                      </select>
+                      <input type="date" value={planValidUntil} onChange={e => setPlanValidUntil(e.target.value)} aria-label="Plan valid until" className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white p-2 text-[11px] text-[#0B2545]" />
+                    </div>
+                    <p className="mt-1 text-[10px] text-slate-400">Active means this plan still applies to a position you have imported. The end date is optional.</p>
                   </div>
                 </div>
               ) : <TradeImportDrawer isOpen embedded defaultTradeDate={defaultTradeDate} onClose={onClose} onImported={items => { onImported?.(items); onClose(); }} />}

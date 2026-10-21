@@ -14,7 +14,7 @@ export type ImportedTradeDraft = {
   amount?: number;
   fee?: number;
   motive?: { posTag?: string; tags?: string[]; desc?: string };
-  plan?: { tp?: string | number; sl?: string | number; desc?: string };
+  plan?: { tp?: string | number; sl?: string | number; desc?: string; status?: 'active' | 'completed' | 'cancelled'; valid_until?: string };
 };
 
 export type FileImportPreview = {

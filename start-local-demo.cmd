@@ -21,4 +21,11 @@ if not exist "node_modules" (
 )
 
 echo Starting local demo at http://127.0.0.1:5173/
+set "PROJECT_ROOT=%CD%"
+if exist "backend\.venv\Scripts\python.exe" (
+  echo Starting TradingNote API at http://127.0.0.1:8000/
+  start "TradingNote API" cmd /k "cd /d %PROJECT_ROOT%\backend && .venv\Scripts\python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000"
+) else (
+  echo Backend virtual environment not found. Start the API separately from backend.
+)
 call "%NPM_CMD%" run dev -- --port 5173 --strictPort
