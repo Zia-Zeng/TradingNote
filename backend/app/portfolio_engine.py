@@ -12,6 +12,8 @@ from typing import Any
 
 def _key(row: dict[str, Any]) -> tuple[str, str, str]:
     market = str(row.get("market") or "CN").upper()
+    if market in {"A-SHARE", "A_SHARE", "STOCK", "STOCKS"}:
+        market = "CN"
     currency = str(row.get("currency") or {"CN": "CNY", "HK": "HKD", "US": "USD"}.get(market, "CNY")).upper()
     code = str(row.get("code") or row.get("symbol") or "").upper()
     for suffix in (".SH", ".SS", ".SZ", ".BJ"):
@@ -93,6 +95,8 @@ def roll_portfolio(
     last_daily_unrealized: dict[str, float] = {}
     last_unrealized_by_key: dict[tuple[str, str, str], float] = {}
     realized_to_date: dict[str, float] = {}
+    ledger_incomplete = False
+    warnings: list[str] = []
     # Establish the starting unrealized P&L at baseline, so the first reported
     # day is a change rather than the accumulated gain since purchase.
     for key, position in positions.items():
@@ -123,6 +127,9 @@ def roll_portfolio(
                 cash[ccy] = cash.get(ccy, 0.0) - gross_amount - fee
             else:
                 old_qty = float(position["quantity"])
+                if qty > old_qty + 1e-9:
+                    ledger_incomplete = True
+                    warnings.append(f"{position['symbol']}: sell quantity exceeds recorded holdings on {day}; later ledger P&L is partial.")
                 sold = min(qty, old_qty)
                 allocated_fee = fee * sold / qty if qty else 0.0
                 realized_pnl = sold * (price - float(position["average_cost"])) - allocated_fee
@@ -137,7 +144,7 @@ def roll_portfolio(
         day_unrealized: dict[str, float] = {}
         day_unrealized_by_key: dict[tuple[str, str, str], float] = {}
         held_value: dict[str, float] = {}
-        complete = True
+        complete = not ledger_incomplete
         position_rows = []
         attribution = []
         for key, position in positions.items():
@@ -175,8 +182,8 @@ def roll_portfolio(
         if not complete:
             missing_dates.append(day)
         state = {"date": day, "cash_by_currency": {k: round(v, 4) for k, v in sorted(cash.items())}, "holdings_market_value_by_currency": {k: round(v, 4) for k, v in sorted(held_value.items())}, "total_assets_by_currency": {k: round(v, 4) for k, v in sorted(state_assets.items())}, "total_assets_complete": total_assets_complete, "realized_pnl_by_currency": {k: round(v, 4) for k, v in sorted(realized.items())}, "realized_pnl_to_date_by_currency": {k: round(v, 4) for k, v in sorted(realized_to_date.items())}, "unrealized_pnl_by_currency": {k: round(v, 4) for k, v in sorted(day_unrealized.items())}, "holding_pnl_by_currency": {k: round(realized_to_date.get(k, 0.0) + day_unrealized.get(k, 0.0), 4) for k in sorted(set(realized_to_date) | set(day_unrealized))}, "positions": position_rows, "complete": complete}
-        days.append({**state, "pnl_by_currency": {k: round(v, 4) for k, v in sorted(pnl.items())}, "attribution": sorted(attribution, key=lambda item: abs(item["pnl"]), reverse=True), "daily_state": state})
+        days.append({**state, "pnl_by_currency": {k: round(v, 4) for k, v in sorted(pnl.items())}, "attribution": sorted(attribution, key=lambda item: abs(item["pnl"]), reverse=True), "daily_state": state, **({"reason": "trade_history_incomplete"} if ledger_incomplete else {})})
         last_daily_unrealized = day_unrealized
         last_unrealized_by_key = day_unrealized_by_key
 
-    return {"baseline_date": baseline_date, "days": days, "incomplete_dates": missing_dates, "warnings": ["Daily P&L includes realized P&L on sells and the daily change in unrealized P&L. Moving weighted-average cost includes explicitly recorded trade fees; absent fees are treated as zero. Taxes and corporate actions are excluded."]}
+    return {"baseline_date": baseline_date, "days": days, "incomplete_dates": missing_dates, "warnings": ["Daily P&L includes realized P&L on sells and the daily change in unrealized P&L. Moving weighted-average cost includes explicitly recorded trade fees; absent fees are treated as zero. Taxes and corporate actions are excluded.", *warnings]}

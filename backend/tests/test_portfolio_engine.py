@@ -71,6 +71,33 @@ class PortfolioRollForwardTests(unittest.TestCase):
         ], self.prices, "2026-10-15")
         self.assertEqual(result["days"][0]["daily_state"]["positions"][0]["quantity"], 20)
 
+    def test_a_share_trade_uses_cn_closing_prices(self):
+        baseline = {"as_of": "2026-10-08", "rows": [], "total_assets": None}
+        trades = [{"id": "buy", "date": "2026-10-09", "time": "10:30", "type": "Buy", "code": "601899", "market": "A-Share", "qty": 100, "price": 30}]
+        prices = {("CN", "CNY", "601899"): [
+            {"date": "2026-10-09", "close": 30}, {"date": "2026-10-12", "close": 31},
+        ]}
+        result = roll_portfolio(baseline, trades, prices, "2026-10-12")
+        self.assertEqual(result["days"][-1]["pnl_by_currency"], {"CNY": 100.0})
+        self.assertTrue(result["days"][-1]["complete"])
+
+    def test_oversold_history_marks_later_days_partial(self):
+        baseline = {"as_of": "2026-04-14", "rows": [], "total_assets": None}
+        trades = [
+            {"id": "buy", "date": "2026-04-15", "type": "Buy", "code": "KO.N", "market": "US", "qty": 2, "price": 90},
+            {"id": "sell", "date": "2026-05-08", "type": "Sell", "code": "KO.N", "market": "US", "qty": 3, "price": 91},
+        ]
+        prices = {("US", "USD", "KO.N"): [
+            {"date": "2026-04-15", "close": 90}, {"date": "2026-04-16", "close": 91},
+            {"date": "2026-05-08", "close": 92}, {"date": "2026-05-11", "close": 93},
+        ]}
+        result = roll_portfolio(baseline, trades, prices, "2026-05-11")
+        days = {day["date"]: day for day in result["days"]}
+        self.assertTrue(days["2026-04-16"]["complete"])
+        self.assertFalse(days["2026-05-08"]["complete"])
+        self.assertFalse(days["2026-05-11"]["complete"])
+        self.assertTrue(any("exceeds recorded holdings" in warning for warning in result["warnings"]))
+
 
 if __name__ == "__main__":
     unittest.main()

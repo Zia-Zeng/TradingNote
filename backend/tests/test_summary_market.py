@@ -62,7 +62,7 @@ class CsiSummaryMarketTests(unittest.IsolatedAsyncioTestCase):
 
         brief = build_daily_brief(context)
 
-        self.assertIn("沪深300+0.30%", brief["market"]["text"])
+        self.assertIn("CSI 300 +0.30%", brief["market"]["text"])
         self.assertEqual(brief["portfolio"]["amounts"], [])
         self.assertEqual(brief["winners"], [])
 
@@ -88,7 +88,7 @@ class CsiSummaryMarketTests(unittest.IsolatedAsyncioTestCase):
         ])
         self.assertEqual(brief["winners"], [])
         self.assertEqual(brief["losers"], [])
-        self.assertTrue(any("跨币种" in warning for warning in brief["caveats"]))
+        self.assertTrue(brief["contributions_by_market"])
 
     async def test_holdings_select_market_even_without_daily_attribution(self):
         pnl = {"days": [{"date": "2026-10-21", "complete": True, "pnl_by_currency": {}, "attribution": []}]}
@@ -118,4 +118,4 @@ class CsiSummaryMarketTests(unittest.IsolatedAsyncioTestCase):
             context = await today._daily_summary_context("2026-10-21")
 
         brief = build_daily_brief(context)
-        self.assertEqual(brief["market"]["text"], "沪深300+2.39%。")
+        self.assertEqual(brief["market"]["text"], "CSI 300 +2.39%.")

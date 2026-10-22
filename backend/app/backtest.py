@@ -1,4 +1,4 @@
-"""Submit the five fixed A-share presets to SuperMind's remote backtest runner."""
+"""Run fixed Agent backtest presets for A-shares and US stocks."""
 
 from __future__ import annotations
 
@@ -18,8 +18,12 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException
 import httpx
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
+from .cached_history import cached_daily_history
 from .market_data import fetch_us_history
+from .storage import save_market_history_segment
+from us_backtest_worker.engine import run_backtest as run_us_engine
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -204,11 +208,24 @@ def _public_result(raw: dict, *, cached: bool, months: int) -> dict:
 
 async def _run_us_backtest(strategy: str, symbol: str, start: date, end: date, months: int) -> dict:
     required = ("open", "high", "low", "volume") if strategy == "volume" else ("open",)
+    history_start = start - timedelta(days=300)
     try:
-        history = await fetch_us_history(symbol, start - timedelta(days=300), end, required_fields=required)
+        history = await cached_daily_history(symbol, "US", history_start, end)
+        bars = history["bars"]
+        if not bars or any(any(field not in bar for field in required) for bar in bars):
+            history = await fetch_us_history(symbol, history_start, end, required_fields=required)
+            bars = history["bars"]
+            save_market_history_segment("US", symbol, history_start.isoformat(), end.isoformat(), history["source"], bars)
     except (RuntimeError, ValueError, OSError) as exc:
         raise HTTPException(status_code=502, detail="US daily history is unavailable for this ticker.") from exc
-    worker_url = os.getenv("US_BACKTEST_WORKER_URL", "http://127.0.0.1:8001").rstrip("/")
+    worker_url = os.getenv("US_BACKTEST_WORKER_URL", "").strip().rstrip("/")
+    if not worker_url:
+        try:
+            result = await run_in_threadpool(run_us_engine, strategy, symbol, start.isoformat(), end.isoformat(), bars)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        result.update({"months": months, "cached": False, "chart_error": None})
+        return result
     token = os.getenv("US_BACKTEST_WORKER_TOKEN", "").strip()
     if not worker_url.startswith(("http://127.0.0.1:", "http://localhost:", "https://")):
         raise HTTPException(status_code=503, detail="The US backtest worker URL must use HTTPS outside localhost.")
@@ -220,7 +237,7 @@ async def _run_us_backtest(strategy: str, symbol: str, start: date, end: date, m
             response = await client.post(f"{worker_url}/backtest", json={
                 "strategy": strategy, "ticker": symbol,
                 "start_date": start.isoformat(), "end_date": end.isoformat(),
-                "bars": history["bars"],
+                "bars": bars,
             }, headers=headers)
         if response.status_code == 422:
             raise HTTPException(status_code=422, detail="US history does not contain enough valid bars for this strategy.")

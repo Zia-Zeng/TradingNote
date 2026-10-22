@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from random import sample
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -73,6 +74,28 @@ def get_feed_prompt() -> str:
     return FEED_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
+def _four_paragraphs(body: str) -> str:
+    paragraphs = [" ".join(part.split()) for part in re.split(r"(?:\r?\n)+", body) if part.strip()]
+    if len(paragraphs) == 4:
+        return "\n\n".join(paragraphs)
+
+    text = " ".join(paragraphs)
+    sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z"“])', text)
+    if len(sentences) < 4:
+        words = text.split()
+        cuts = [round(len(words) * part / 4) for part in range(1, 4)]
+        return "\n\n".join(" ".join(words[start:end]) for start, end in zip([0, *cuts], [*cuts, len(words)]))
+
+    cumulative = [0]
+    for sentence in sentences:
+        cumulative.append(cumulative[-1] + len(sentence.split()))
+    cuts = []
+    for part in range(1, 4):
+        candidates = range((cuts[-1] if cuts else 0) + 1, len(sentences) - (4 - part) + 1)
+        cuts.append(min(candidates, key=lambda index: abs(cumulative[index] - cumulative[-1] * part / 4)))
+    return "\n\n".join(" ".join(sentences[start:end]) for start, end in zip([0, *cuts], [*cuts, len(sentences)]))
+
+
 def _validate_feed(payload: Any, feed_date: str, news: dict[str, str]) -> dict[str, Any]:
     if not isinstance(payload, dict) or not isinstance(payload.get("articles"), list):
         raise ValueError("Feed response must contain an articles array.")
@@ -81,6 +104,7 @@ def _validate_feed(payload: Any, feed_date: str, news: dict[str, str]) -> dict[s
     result = DailyFeed.model_validate(payload)
     used_books: set[str] = set()
     for article in result.articles:
+        article.body = _four_paragraphs(article.body)
         if article.book not in BOOKS or article.book in used_books:
             raise ValueError("Feed articles must use five different books from the configured list.")
         if not article.title.startswith(article.book):
@@ -103,7 +127,13 @@ async def generate_daily_feed(feed_day: date) -> dict[str, Any]:
         try:
             DailyFeed.model_validate(cached)
             if all(article.get("cover") for article in cached.get("articles", [])):
-                return cached
+                changed = False
+                for article in cached["articles"]:
+                    formatted = _four_paragraphs(article["body"])
+                    if formatted != article["body"]:
+                        article["body"] = formatted
+                        changed = True
+                return save_daily_feed(day_key, cached) if changed else cached
         except ValidationError:
             pass
         logger.info("Regenerating cached Feed edition with the current article fields or covers.")

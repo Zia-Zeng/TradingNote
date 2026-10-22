@@ -13,6 +13,7 @@ from datetime import date, datetime, time as datetime_time, timedelta, timezone
 from time import monotonic
 from typing import Any
 from urllib.parse import urlencode
+from urllib.error import URLError
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
@@ -24,6 +25,7 @@ _HISTORY_CACHE: dict[tuple[str, str, str, str], tuple[float, dict[str, Any]]] = 
 _HISTORY_LOCKS: dict[tuple[str, str, str, str], asyncio.Lock] = {}
 _HISTORY_CACHE_SECONDS = 600
 _HISTORY_FALLBACK_CACHE_SECONDS = 300
+DEFAULT_A_SHARE_PROVIDER_ORDER = "wind,baostock,akshare,yahoo"
 logger = logging.getLogger(__name__)
 _HISTORY_CACHE_LOCK = threading.Lock()
 
@@ -368,7 +370,7 @@ async def fetch_us_history(
     code: str, start_date: date | str, end_date: date | str,
     required_fields: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """Fetch US daily bars from Wind, then Yahoo when Wind is unavailable."""
+    """Fetch US daily bars from Yahoo, then Wind when Yahoo is unavailable."""
     symbol = code.strip().upper()
     if not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,15}", symbol):
         raise ValueError("A valid US stock ticker is required.")
@@ -376,22 +378,27 @@ async def fetch_us_history(
     if start > end:
         raise ValueError("start_date must be earlier than or equal to end_date.")
     failures: list[dict[str, str]] = []
+    yahoo_symbol = re.sub(r"\.(?:O|N)$", "", symbol)
+    try:
+        result = await asyncio.wait_for(run_in_threadpool(_yahoo_history, yahoo_symbol, start, end), timeout=20)
+        bars = result.get("bars", [])
+        if not bars or any(any(field not in bar for field in required_fields) for bar in bars):
+            raise RuntimeError("Yahoo returned incomplete daily bars.")
+        return _response(symbol, bars, "Yahoo Finance", ["Yahoo Finance"], failures)
+    except Exception as exc:
+        logger.warning("US market data Yahoo request failed: %s", type(exc).__name__)
+        failures.append({"provider": "Yahoo Finance", "reason": type(exc).__name__})
     try:
         bars = await asyncio.wait_for(_wind_history(symbol, start, end), timeout=12)
         if not bars or any(any(field not in bar for field in required_fields) for bar in bars):
             raise RuntimeError("Wind returned incomplete daily bars.")
-        return _response(symbol, bars, "Wind Finmarket", ["Wind Finmarket"], failures)
+        return _response(symbol, bars, "Wind Finmarket", ["Yahoo Finance", "Wind Finmarket"], failures)
     except Exception as exc:
         logger.warning("US market data Wind request failed: %s", type(exc).__name__)
         failures.append({"provider": "Wind Finmarket", "reason": type(exc).__name__})
-    yahoo_symbol = re.sub(r"\.(?:O|N)$", "", symbol)
-    result = await asyncio.wait_for(run_in_threadpool(_yahoo_history, yahoo_symbol, start, end), timeout=14)
-    bars = result.get("bars", [])
-    if not bars:
-        raise RuntimeError("US stock price history is unavailable.")
-    if any(any(field not in bar for field in required_fields) for bar in bars):
-        raise RuntimeError("US stock price history is missing required fields.")
-    return _response(symbol, bars, "Yahoo Finance", ["Wind Finmarket", "Yahoo Finance"], failures)
+    raise RuntimeError("All US stock history providers failed (" + "; ".join(
+        f"{item['provider']}: {item['reason']}" for item in failures
+    ) + ").")
 
 
 async def fetch_a_share_history(code: str, start_date: date | str, end_date: date | str) -> dict[str, Any]:
@@ -402,7 +409,7 @@ async def fetch_a_share_history(code: str, start_date: date | str, end_date: dat
     if start > end:
         raise ValueError("start_date must be earlier than or equal to end_date.")
 
-    provider_order = os.getenv("MARKET_DATA_PROVIDER_ORDER") or "yahoo,baostock,akshare,wind"
+    provider_order = os.getenv("MARKET_DATA_PROVIDER_ORDER") or DEFAULT_A_SHARE_PROVIDER_ORDER
     key = (normalized_code, start, end, provider_order)
     cached = _HISTORY_CACHE.get(key)
     if cached and cached[0] > monotonic():
@@ -424,7 +431,7 @@ async def fetch_a_share_history(code: str, start_date: date | str, end_date: dat
 async def _fetch_a_share_history_uncached(normalized_code: str, start: str, end: str) -> dict[str, Any]:
     """Fetch unadjusted A-share daily bars, falling back in configured order."""
 
-    configured = os.getenv("MARKET_DATA_PROVIDER_ORDER") or "yahoo,baostock,akshare,wind"
+    configured = os.getenv("MARKET_DATA_PROVIDER_ORDER") or DEFAULT_A_SHARE_PROVIDER_ORDER
     provider_order = [name.strip().lower() for name in configured.split(",") if name.strip()]
     providers = {"yahoo": "Yahoo Finance", "wind": "Wind Finmarket", "akshare": "AkShare", "baostock": "BaoStock"}
     unknown = [name for name in provider_order if name not in providers]
@@ -438,7 +445,7 @@ async def _fetch_a_share_history_uncached(normalized_code: str, start: str, end:
         try:
             if provider == "yahoo":
                 yahoo_code = _wind_code(normalized_code).replace(".SH", ".SS")
-                result = await asyncio.wait_for(run_in_threadpool(_yahoo_history, yahoo_code, start, end), timeout=14)
+                result = await asyncio.wait_for(run_in_threadpool(_yahoo_history, yahoo_code, start, end), timeout=20)
                 bars = result.get("bars", [])
             elif provider == "wind":
                 bars = await asyncio.wait_for(_wind_history(normalized_code, start, end), timeout=12)
@@ -480,10 +487,20 @@ def _yahoo_history(code: str, start_date: str, end_date: str) -> dict[str, Any]:
         "interval": "1d",
         "events": "div,splits",
     })
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?{params}"
-    request = Request(url, headers={"User-Agent": "Mozilla/5.0 TradingNote/0.1"})
-    with urlopen(request, timeout=12) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    payload = None
+    last_error = None
+    for host in ("query2.finance.yahoo.com", "query1.finance.yahoo.com"):
+        url = f"https://{host}/v8/finance/chart/{symbol}?{params}"
+        request = Request(url, headers={"User-Agent": "Mozilla/5.0 TradingNote/0.1"})
+        try:
+            with urlopen(request, timeout=8) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            break
+        except (URLError, TimeoutError, ValueError) as exc:
+            last_error = exc
+            logger.warning("Yahoo Finance %s request failed: %s", host, type(exc).__name__)
+    if payload is None:
+        raise RuntimeError("Yahoo Finance chart endpoints are unavailable.") from last_error
     chart = payload.get("chart", {}) if isinstance(payload, dict) else {}
     if chart.get("error"):
         raise RuntimeError("Market data provider rejected this ticker.")
@@ -536,7 +553,7 @@ async def fetch_daily_history(code: str, market: str, start_date: date | str, en
         # Broker ledgers commonly use a five-digit Hong Kong code (02259),
         # while Yahoo charts use the unpadded ticker (2259.HK).
         yahoo_code = f"{normalized_code.lstrip('0') or '0'}.HK" if normalized_market == "HK" and re.fullmatch(r"\d{1,5}", normalized_code) else normalized_code
-        result = await asyncio.wait_for(run_in_threadpool(_yahoo_history, yahoo_code, start, end), timeout=14)
+        result = await asyncio.wait_for(run_in_threadpool(_yahoo_history, yahoo_code, start, end), timeout=20)
     with _HISTORY_CACHE_LOCK:
         _HISTORY_CACHE[cache_key] = (monotonic() + 300, result)
     return result

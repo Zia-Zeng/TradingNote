@@ -446,7 +446,7 @@ export default function Home() {
                   >
                     <span className="text-[11px] font-bold">{day}</span>
                     {pnlLabel && <span title={dayPnl
-                      ? `${pnlEntries.map(([currency, value]) => formatPnl(value, currency)).join(' · ')}${dayPnl.fx_conversion_complete && totalPnlBase != null ? ` · Total ${formatPnl(totalPnlBase, dayPnl.pnl_base_currency || 'CNY')}` : ' · FX conversion unavailable'}${!dayPnl.complete ? ` · Partial data: ${(dayPnl.missing_instruments || []).map(item => `${item.symbol} (${item.code})`).join(', ') || (dayPnl.reason === 'snapshot_anchor' ? 'same-day P&L cannot be derived from an end-of-day snapshot' : 'price history incomplete')}` : ''}`
+                      ? `${pnlEntries.map(([currency, value]) => formatPnl(value, currency)).join(' · ')}${dayPnl.fx_conversion_complete && totalPnlBase != null ? ` · Total ${formatPnl(totalPnlBase, dayPnl.pnl_base_currency || 'CNY')}` : ' · FX conversion unavailable'}${!dayPnl.complete ? ` · Partial data: ${(dayPnl.missing_instruments || []).map(item => `${item.symbol} (${item.code})`).join(', ') || (dayPnl.reason === 'snapshot_anchor' ? 'same-day P&L cannot be derived from an end-of-day snapshot' : dayPnl.reason === 'snapshot_mismatch' ? 'historical holdings differ from the account snapshot' : dayPnl.reason === 'trade_history_incomplete' ? 'a recorded sell exceeds known holdings' : 'price history incomplete')}` : ''}`
                       : pnlValue}
                       className={cn("max-w-full text-[7px] leading-[8px] font-semibold font-mono", pnlEntries.length > 1 && "flex flex-col gap-px")}>{pnlEntries.length > 1
                         ? pnlLines.map((line, lineIndex) => {

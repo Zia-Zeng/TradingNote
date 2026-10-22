@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, useSearchParams, useMatch, useLocation } from 'react-router-dom';
 import { 
   ChevronLeft, ChevronRight, MoreHorizontal,
-  BotMessageSquare, Zap, Sparkles, MessageCircle, Tag, Edit2, Edit3, Plus, Trash2, Loader2, AlertTriangle
+  Zap, Sparkles, MessageCircle, Tag, Edit2, Edit3, Plus, Trash2, Loader2, AlertTriangle
 } from 'lucide-react';
 import { ComposedChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Scatter, Brush } from 'recharts';
 import { cn } from '../lib/utils';
@@ -74,16 +74,16 @@ type TradeRecord = {
 };
 
 type TimelineItem = Omit<TradeRecord, 'type'> & { action: 'Buy' | 'Sell'; type: 'Trade'; displayDate: string };
-type AssetNote = { id: string; asset_key: string; content: string; created_at: string };
+type AssetNote = { id: string; asset_key: string; content: string; created_at: string; source: 'manual' | 'ai_review' };
 type NoteTimelineItem = AssetNote & { type: 'Note'; displayDate: string };
 type UserTimelineItem = TimelineItem | NoteTimelineItem;
 type MarketBar = { date: string; open?: number; high?: number; low?: number; close: number; volume?: number; amount?: number };
-type MarketHistory = { as_of: string | null; latest_close: number | null; bars: MarketBar[] };
+type MarketHistory = { as_of: string | null; latest_close: number | null; refresh_failed?: boolean; bars: MarketBar[] };
 type CachedMarketHistory = { cachedAt: number; endDate: string; data: MarketHistory };
 const MARKET_CACHE_FRESH_MS = 10 * 60 * 1000;
 const MARKET_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-const marketCacheKey = (code: string, startDate: string) => `tradingnote:market-history:${code}:${startDate}`;
+const marketCacheKey = (market: string, code: string, startDate: string) => `tradingnote:market-history:${market}:${code}:${startDate}`;
 
 const readMarketCache = (key: string): CachedMarketHistory | null => {
   try {
@@ -222,7 +222,6 @@ export default function Detail() {
   const [noteMutationId, setNoteMutationId] = useState<string | null>(null);
   const [noteError, setNoteError] = useState<string | null>(null);
   const [savedAssetTracking, setSavedAssetTracking] = useState<SavedAssetTracking | null>(null);
-  const [trackingPromptVersion, setTrackingPromptVersion] = useState<string | null>(null);
   const [isGeneratingTracking, setIsGeneratingTracking] = useState(false);
   const [trackingError, setTrackingError] = useState<string | null>(null);
   const trackingRequestRef = useRef(0);
@@ -348,7 +347,11 @@ export default function Detail() {
   const visibleTimeline = timeline.slice(0, isHistoryPage ? timeline.length : 3);
   const latestTrade = tradeTimeline[tradeTimeline.length - 1];
   const startDate = useMemo(() => marketStartDate(assetTrades), [assetTrades]);
-  const marketCode = /^\d{6}$/.test(data.code) ? data.code : '';
+  const market = ['A-SHARE', 'A_SHARE', 'STOCK', 'STOCKS'].includes(data.market.toUpperCase()) ? 'CN' : data.market.toUpperCase();
+  const ticker = data.code.trim() || (['US', 'GLOBAL', 'CRYPTO'].includes(market) ? data.symbol.trim() : '');
+  const marketCode = market === 'CN'
+    ? (/^\d{6}(?:\.(?:SH|SZ|BJ|SS))?$/i.test(ticker) ? ticker : '')
+    : ticker;
 
   useEffect(() => {
     if (tradeLoading) return;
@@ -376,7 +379,7 @@ export default function Detail() {
       return;
     }
     const endDate = localToday();
-    const cacheKey = marketCacheKey(marketCode, startDate);
+    const cacheKey = marketCacheKey(market, marketCode, startDate);
     const cached = readMarketCache(cacheKey);
     setMarketData(cached?.data || null);
     setMarketError(null);
@@ -385,13 +388,13 @@ export default function Detail() {
       return;
     }
     setMarketLoading(true);
-    const query = new URLSearchParams({ start_date: startDate, end_date: endDate });
-    apiRequest<MarketHistory>(`/api/market/history/${encodeURIComponent(marketCode)}?${query.toString()}`)
+    const query = new URLSearchParams({ code: marketCode, market, start_date: startDate, end_date: endDate });
+    apiRequest<MarketHistory>(`/api/market/daily?${query.toString()}`)
       .then(result => { saveMarketCache(cacheKey, endDate, result); if (!cancelled) setMarketData(result); })
       .catch(error => { if (!cancelled) setMarketError(error instanceof Error ? error.message : 'Unable to load daily market data.'); })
       .finally(() => { if (!cancelled) setMarketLoading(false); });
     return () => { cancelled = true; };
-  }, [assetTrades.length, isHistoryPage, marketCode, startDate]);
+  }, [assetTrades.length, isHistoryPage, market, marketCode, startDate]);
 
   useEffect(() => {
     trackingRequestRef.current += 1;
@@ -407,14 +410,6 @@ export default function Detail() {
     window.addEventListener(SAVED_RESULTS_EVENT, sync);
     return () => window.removeEventListener(SAVED_RESULTS_EVENT, sync);
   }, [data.id]);
-
-  useEffect(() => {
-    let cancelled = false;
-    apiRequest<{ version: string }>('/api/tracking/prompt')
-      .then(result => { if (!cancelled) setTrackingPromptVersion(result.version); })
-      .catch(() => { if (!cancelled) setTrackingPromptVersion(null); });
-    return () => { cancelled = true; };
-  }, []);
 
   const handleTimelineSave = async (formData: any) => {
     if (!editingTimelineItem) return;
@@ -462,13 +457,14 @@ export default function Detail() {
   const handleUpdateAssetNote = async (noteId: string) => {
     const content = editingNoteContent.trim();
     if (!content || noteMutationId || notesForAssetKey !== noteAssetKey) return;
+    const source = assetNotes.find(note => note.id === noteId)?.source || 'manual';
     const assetKey = noteAssetKey;
     setNoteMutationId(noteId);
     setNoteError(null);
     try {
       const saved = await apiRequest<AssetNote>(`/api/asset-notes/${encodeURIComponent(noteId)}`, {
         method: 'PUT',
-        body: JSON.stringify({ asset_key: assetKey, content }),
+        body: JSON.stringify({ asset_key: assetKey, content, source }),
       });
       if (noteAssetKeyRef.current !== assetKey) return;
       setAssetNotes(current => current.map(note => note.id === noteId ? saved : note));
@@ -509,7 +505,7 @@ export default function Detail() {
     const tradeContext = {
       id: tradeId,
       symbol: data.symbol,
-      code: /^\d{6}$/.test(code) ? code : undefined,
+      code: code || undefined,
       market: optionalText(data.market),
       direction: data.direction,
       status: optionalText(data.status),
@@ -570,7 +566,6 @@ export default function Detail() {
   };
 
   const aiTracking = savedAssetTracking?.generatedBy === 'ai-tracking' ? savedAssetTracking : null;
-  const trackingIsOutdated = Boolean(aiTracking && trackingPromptVersion && aiTracking.promptVersion !== trackingPromptVersion);
 
   useEffect(() => {
     if (scrollTo) {
@@ -624,7 +619,7 @@ export default function Detail() {
               {formatPrice(data.currentPrice)}
             </div>
             <div className="text-[9px] text-slate-400 mt-0.5">
-              {marketData?.as_of ? `Daily close · ${marketData.as_of}${marketLoading ? ' · updating…' : ''}` : marketLoading ? 'Loading daily close…' : 'Daily close unavailable'}
+              {marketData?.as_of ? `Daily close · ${marketData.as_of}${marketLoading ? ' · updating…' : marketData.refresh_failed ? ' · cached' : ''}` : marketLoading ? 'Loading daily close…' : 'Daily close unavailable'}
             </div>
           </div>
           <div className="text-right">
@@ -660,7 +655,7 @@ export default function Detail() {
       <div className="bg-white pt-4 pb-3 mb-1 shadow-sm overflow-hidden">
         <div className="h-[220px] w-full pb-2 px-2">
           {marketLoading && data.chartData.length === 0 ? <div className="h-full flex items-center justify-center text-[11px] text-slate-400">Loading daily market data…</div>
-            : data.chartData.length === 0 ? <div className="h-full flex items-center justify-center text-[11px] text-slate-400">Daily market data is unavailable for this asset.</div>
+            : data.chartData.length === 0 ? <div className="h-full flex items-center justify-center text-[11px] text-slate-400">{!marketCode && assetTrades.length ? 'A recognized market ticker is needed to load daily data.' : 'Daily market data is unavailable for this asset.'}</div>
             : <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={data.chartData} margin={{ top: 25, right: 15, left: 15, bottom: 5 }}>
               <defs>
@@ -701,7 +696,7 @@ export default function Detail() {
                 <div className="pl-4 flex-1 min-w-0">
                   <div className="text-[10px] text-slate-400 font-mono font-bold tracking-wider mb-2">{item.displayDate}</div>
                   <div className="bg-[#EE6C4D]/5 border border-[#EE6C4D]/20 rounded-xl p-2.5">
-                    <div className="flex justify-end gap-1 mb-1">
+                    <div className="flex items-center justify-end gap-1 mb-1">
                       <button
                         onClick={() => { setEditingNoteId(item.id); setEditingNoteContent(item.content); setNoteError(null); }}
                         disabled={noteMutationId !== null}
@@ -714,12 +709,13 @@ export default function Detail() {
                         aria-label="Delete note"
                         className="text-slate-400 hover:text-rose-600 p-1 disabled:opacity-50"
                       ><Trash2 size={12} /></button>
+                      {item.source === 'ai_review' && <span className="inline-flex items-center gap-0.5 rounded border border-[#EE6C4D]/30 bg-[#EE6C4D]/10 px-1.5 py-0.5 text-[9px] font-bold text-[#B9482E]"><Sparkles size={10} /> AI</span>}
                     </div>
                     {editingNoteId === item.id ? (
                       <div>
                         <textarea
                           value={editingNoteContent}
-                          maxLength={140}
+                          maxLength={item.source === 'ai_review' ? 2000 : 140}
                           rows={3}
                           onChange={event => setEditingNoteContent(event.target.value)}
                           onKeyDown={event => {
@@ -880,16 +876,10 @@ export default function Detail() {
           </div>
         )}
 
-        {trackingIsOutdated && (
-          <div role="status" className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10px] font-medium text-amber-800">
-            This saved analysis uses an older Tracking prompt. Select Regenerate to refresh its market news.
-          </div>
-        )}
-
         <div className={cn("space-y-3 transition-opacity", isGeneratingTracking && "opacity-60")}>
           <div>
             <div className="text-[10px] font-bold uppercase tracking-wide text-[#EE6C4D] mb-1">Overall Summary</div>
-            <p className="text-[10px] text-slate-700 leading-relaxed">{trackingIsOutdated ? 'Saved summary is outdated. Regenerate to fetch current market news.' : savedAssetTracking?.overallSummary || data.analysis.overall_summary}</p>
+            <p className="text-[10px] text-slate-700 leading-relaxed">{savedAssetTracking?.overallSummary || data.analysis.overall_summary}</p>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -937,23 +927,6 @@ export default function Detail() {
         onSave={handleTimelineSave}
       />
 
-      {!isHistoryPage && (
-      <>
-      {/* Floating Agent Entry */}
-      <div className="fixed bottom-6 right-4 z-40">
-        <button 
-          onClick={() => navigate(`/agent?trade=${data.id}&ref=detail-${data.id}&symbol=${encodeURIComponent(data.symbol)}&pnl=${encodeURIComponent(data.profitVal)}&prompt=How%20did%20I%20execute%20these%20trades%3F`)}
-          className="bg-[#0B2545] text-white p-2.5 rounded-full shadow-lg hover:scale-105 active:scale-95 transition-transform flex items-center justify-center relative"
-        >
-          <BotMessageSquare size={18} />
-          <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#EE6C4D] opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-[#F57C00]"></span>
-          </span>
-        </button>
-      </div>
-      </>
-      )}
     </div>
   );
 }

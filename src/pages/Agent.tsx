@@ -47,10 +47,22 @@ interface Message {
 }
 
 type InsightsAsset = { symbol: string; code: string | null; market_value?: number | null; share_pct?: number | null; pnl?: number | null; return_pct?: number | null };
+type ClosedTradeEvidence = {
+  closed_trades: number | string;
+  trades_involved: number | string;
+  average_holding_days: number | string | null;
+  win_rate_pct?: number | null;
+  win_rate?: string;
+  total_closed_pnl_by_currency?: Record<string, number> | null;
+  total_closed_pnl?: string;
+};
 type BehaviorInsights = {
   conversation_id?: string;
   summary: string;
-  key_evidence: { holding_period: string; trading_frequency: string; turnover: string };
+  style_label?: string;
+  style_profile?: { transaction_pace: string; holding_period: string; asset_selection: string; positioning_method: string; trading_type?: string; main_issues: string };
+  trading_characteristics?: Array<{ title: string; evidence: string; significance: string }>;
+  closed_trade_evidence?: ClosedTradeEvidence;
   profit_structure: { basis: string; commentary: string; charts: Array<{ currency: string; allocation: InsightsAsset[]; returns: InsightsAsset[] }> };
   suggestion: string;
   period_start: string;
@@ -117,7 +129,7 @@ function parseSavedInsights(content: string): BehaviorInsights | null {
   try {
     const data = JSON.parse(content.slice(INSIGHTS_MESSAGE_PREFIX.length)) as BehaviorInsights;
     return typeof data.summary === 'string' && typeof data.suggestion === 'string'
-      && typeof data.key_evidence?.holding_period === 'string' && Array.isArray(data.profit_structure?.charts)
+      && Array.isArray(data.profit_structure?.charts)
       ? data : null;
   } catch {
     return null;
@@ -126,23 +138,58 @@ function parseSavedInsights(content: string): BehaviorInsights | null {
 
 const insightColor = (pnl: number | null | undefined) => pnl == null ? '#94a3b8' : pnl > 0 ? '#10b981' : pnl < 0 ? '#ef4444' : '#94a3b8';
 const insightAllocationColor = (index: number, total: number) => `hsl(211, 65%, ${(24 + index * 45 / Math.max(total - 1, 1)).toFixed(1)}%)`;
+const evidenceNumber = (value: number | string | null | undefined) => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  const match = value?.match(/^\s*([+-]?\d+(?:\.\d+)?)/);
+  return match ? Number(match[1]) : null;
+};
+const evidenceInteger = (value: number | null) => value == null ? '-' : value.toLocaleString('en-US', { maximumFractionDigits: 0 });
+const evidenceDecimal = (value: number | null) => value == null ? '-' : value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function InsightsResult({ data }: { data: BehaviorInsights }) {
-  const evidence = [
-    ['Holding Period', data.key_evidence.holding_period],
-    ['Trading Frequency', data.key_evidence.trading_frequency],
-    ['Turnover', data.key_evidence.turnover],
+  const closed = data.closed_trade_evidence;
+  const closedTrades = typeof closed?.closed_trades === 'string' && closed.closed_trades.startsWith('No recorded full exits')
+    ? 0 : evidenceNumber(closed?.closed_trades);
+  const involved = typeof closed?.trades_involved === 'string'
+    ? evidenceNumber(closed.trades_involved.match(/;\s*(\d+)\s+trades belong/)?.[1])
+    : evidenceNumber(closed?.trades_involved);
+  const winRate = evidenceNumber(closed?.win_rate_pct ?? closed?.win_rate);
+  const legacyPnl = closed?.total_closed_pnl?.split(';').map(part => part.trim().match(/^([A-Z]{3})\s+([+-]?\d[\d,]*(?:\.\d+)?)/)).filter((match): match is RegExpMatchArray => Boolean(match)) || [];
+  const pnlByCurrency = closed?.total_closed_pnl_by_currency
+    ? Object.entries(closed.total_closed_pnl_by_currency)
+    : legacyPnl.map(match => [match[1], Number(match[2].replace(/,/g, ''))] as [string, number]);
+  const evidence: Array<[string, string, string]> = [
+    ['All', 'Closed Trades', evidenceInteger(closedTrades)],
+    ['All', 'Trades Involved', evidenceInteger(involved)],
+    ['All', 'Avg Holding Days', evidenceDecimal(evidenceNumber(closed?.average_holding_days))],
+    ['All', 'Win Rate', winRate == null ? '-' : `${evidenceDecimal(winRate)}%`],
+    ...(pnlByCurrency.length
+      ? pnlByCurrency.map(([currency, amount]): [string, string, string] => [currency, 'Total Closed P&L', evidenceDecimal(amount)])
+      : [['All', 'Total Closed P&L', '-'] as [string, string, string]]),
+  ];
+  const profile = data.style_profile && [
+    ['Transaction Pace', data.style_profile.transaction_pace],
+    ['Holding Period', data.style_profile.holding_period],
+    ['Asset Selection', data.style_profile.asset_selection],
+    ['Positioning Method', data.style_profile.positioning_method],
+    ...(data.style_profile.trading_type ? [['Trading Type', data.style_profile.trading_type]] : []),
+    ['Main Issues', data.style_profile.main_issues],
   ];
   return <div className="w-[280px] max-w-full space-y-3">
     <p className="text-[12px] leading-relaxed text-[#0B2545]">Based on your account and trading records from {data.period_start} to {data.period_end}:</p>
     <div className="bg-white/90 backdrop-blur-md p-3 rounded-xl border border-white shadow-[0_4px_12px_rgba(11,37,69,0.04)] relative overflow-hidden">
       <div className="absolute top-0 left-0 w-1 h-full bg-[#EE6C4D]" />
       <div className="flex items-center gap-1.5 mb-1.5"><Sparkles size={12} className="text-[#EE6C4D]" /><span className="text-[10px] font-bold text-[#EE6C4D] uppercase tracking-wider">Summary</span></div>
+      {data.style_label && <p className="text-[11px] font-bold text-[#0B2545] mb-1">{data.style_label}</p>}
       <p className="text-[11px] text-slate-700 font-medium leading-relaxed">{data.summary}</p>
     </div>
+    {profile && <div className="rounded-xl border border-slate-100 bg-white/80 p-3">
+      <div className="mb-2 flex items-center gap-1.5"><Activity size={12} className="text-[#0B2545]" /><span className="text-[10px] font-bold uppercase tracking-wider text-[#0B2545]">Style Profile</span></div>
+      <div className="space-y-1.5">{profile.map(([label, value]) => <div key={label} className="text-[10px] leading-relaxed"><span className="font-bold text-[#0B2545]">{label}: </span><span className="text-slate-600">{value}</span></div>)}</div>
+    </div>}
     <div className="bg-slate-50/80 backdrop-blur-md rounded-xl border border-slate-100 shadow-[0_4px_12px_rgba(11,37,69,0.02)] overflow-hidden">
       <div className="p-2.5 border-b border-slate-100 bg-white/50"><div className="flex items-center gap-1.5"><BookOpen size={12} className="text-[#0B2545]" /><span className="text-[10px] font-bold text-[#0B2545] uppercase tracking-wider">Key Evidence</span></div></div>
-      <div className="p-2.5"><table className="w-full text-left text-[10px]"><thead><tr className="text-slate-400"><th className="font-medium pb-2 uppercase tracking-wide">Dimension</th><th className="font-medium pb-2 uppercase tracking-wide">Ledger Perf.</th></tr></thead><tbody className="text-slate-600 align-top">{evidence.map(([label, value]) => <tr key={label} className="border-t border-slate-100/60"><td className="py-1.5 font-bold text-[#0B2545] w-[45%] pr-2">{label}</td><td className="py-1.5">{value}</td></tr>)}</tbody></table></div>
+      <div className="p-2.5"><table className="w-full text-left text-[10px]"><thead><tr className="text-slate-400"><th className="w-[18%] pb-2 font-medium uppercase tracking-wide">Scope</th><th className="w-[52%] pb-2 font-medium uppercase tracking-wide">Metric</th><th className="pb-2 text-right font-medium uppercase tracking-wide">Value</th></tr></thead><tbody className="text-slate-600 align-top">{evidence.map(([scope, metric, value], index) => <tr key={`${metric}-${scope}-${index}`} className="border-t border-slate-100/60"><td className="py-1.5 pr-2 text-slate-500">{scope}</td><td className="py-1.5 pr-2 font-bold text-[#0B2545]">{metric}</td><td className="py-1.5 text-right tabular-nums">{value}</td></tr>)}</tbody></table></div>
     </div>
     <div className="bg-white/80 backdrop-blur-md p-3 rounded-xl border border-white shadow-[0_4px_12px_rgba(11,37,69,0.04)]">
       <div className="flex items-center gap-1.5 mb-3"><BarChart2 size={12} className="text-[#0B2545]" /><span className="text-[10px] font-bold text-[#0B2545] uppercase tracking-wider">Profit Structure</span></div>
@@ -177,6 +224,14 @@ function InsightsResult({ data }: { data: BehaviorInsights }) {
       })}
       <div className="bg-[#0B2545]/5 p-2 rounded-lg border border-[#0B2545]/10"><span className="text-[10px] font-bold text-[#0B2545] block mb-0.5">Profit Summary:</span><p className="text-[10px] text-slate-600 leading-relaxed font-medium">{data.profit_structure.commentary}</p><p className="text-[9px] text-slate-500 mt-1">Holding P/L{data.holdings_as_of ? ` as of ${data.holdings_as_of}` : ''} versus average cost; allocation excludes cash.</p></div>
     </div>
+    {data.trading_characteristics && data.trading_characteristics.length > 0 && <div className="rounded-xl border border-slate-100 bg-white/80 p-3">
+      <div className="mb-2 flex items-center gap-1.5"><Target size={12} className="text-[#0B2545]" /><span className="text-[10px] font-bold uppercase tracking-wider text-[#0B2545]">Trading Characteristics</span></div>
+      <div className="space-y-2.5">{data.trading_characteristics.map((item, index) => <div key={`${item.title}-${index}`} className="text-[10px] leading-relaxed">
+        <p className="font-bold text-[#0B2545]">{index + 1}. {item.title}</p>
+        <p className="text-slate-600">{item.evidence}</p>
+        <p className="font-bold text-[#0B2545]">{item.significance}</p>
+      </div>)}</div>
+    </div>}
     <div className="bg-[#0B2545] p-3 rounded-xl border border-[#0B2545] shadow-lg relative overflow-hidden"><div className="absolute -right-6 -top-6 w-24 h-24 bg-white/5 rounded-full blur-2xl pointer-events-none" /><div className="flex items-center gap-1.5 mb-1.5 relative z-10"><User size={12} className="text-[#EE6C4D]" /><span className="text-[10px] font-bold text-white uppercase tracking-wider">Suggestion</span></div><p className="text-[11px] text-slate-300 leading-relaxed font-medium relative z-10">{data.suggestion}</p></div>
   </div>;
 }
@@ -196,59 +251,60 @@ function AgentInline({ text }: { text: string }) {
 const tableCells = (line: string) => line.trim().replace(/^\||\|$/g, '').split('|').map(cell => cell.trim());
 const tableRow = (line: string) => line.trim().startsWith('|') && line.trim().endsWith('|');
 const tableDivider = (line: string) => tableRow(line) && tableCells(line).every(cell => /^:?-{3,}:?$/.test(cell));
+const hiddenMarketBackgroundLabel = (value: string) => /^(source\s*\/\s*as\s*of|frequency\s*\/\s*adjustment|data continuity note)(?:\s*:|\s*$)/i
+  .test(value.replace(/\*\*/g, '').replace(/^[-*]\s*/, '').trim());
+const formatMarketBackground = (value: string) => value.replace(/\*{0,2}Not applicable;\s*no exit recorded\*{0,2}/gi, '-');
+const MARKET_INDICATORS = ['Starting Close', 'Lowest Close', 'Highest Close', 'Ending Close', 'Period Return', 'Entry Day Change', 'Exit Day Change'] as const;
+const marketIndicatorName = (value: string): typeof MARKET_INDICATORS[number] | null => {
+  const label = value.replace(/[\*_`]/g, '').trim().toLowerCase();
+  if (/^(starting clos|range start clos)/.test(label)) return 'Starting Close';
+  if (/^lowest clos/.test(label)) return 'Lowest Close';
+  if (/^highest clos/.test(label)) return 'Highest Close';
+  if (/^ending clos/.test(label)) return 'Ending Close';
+  if (/^(period return|price change over (?:the |supplied )?period)/.test(label)) return 'Period Return';
+  if (/^(entry day change|first entry day change|price change on position-opening date)/.test(label)) return 'Entry Day Change';
+  if (/^(exit day change|price change on final exit date)/.test(label)) return 'Exit Day Change';
+  return null;
+};
+const marketChangeColor = (value: string) => {
+  const match = value.replace(/[−–]/g, '-').match(/([+-]?)\s*(\d+(?:\.\d+)?)\s*%/);
+  if (!match) return null;
+  const change = Number(`${match[1]}${match[2]}`);
+  return change > 0 ? 'text-emerald-700' : change < 0 ? 'text-rose-700' : null;
+};
 
-function splitNotes(text: string): string[] {
-  const notes: string[] = [];
-  let remaining = text.trim();
-  while (remaining.length > 140) {
-    let boundary = remaining.lastIndexOf('\n', 140);
-    if (boundary < 60) boundary = remaining.lastIndexOf(' ', 140);
-    if (boundary < 60) boundary = 140;
-    notes.push(remaining.slice(0, boundary).trim());
-    remaining = remaining.slice(boundary).trim();
-  }
-  if (remaining) notes.push(remaining);
-  return notes;
-}
-
-function suggestionNotes(text: string): string[] {
-  const heading = /^#{1,3}\s+Suggestion\s*$/im.exec(text);
-  if (!heading) return [];
+function suggestionNote(text: string): string | null {
+  const heading = /^#{1,3}\s*Suggestion\s*$/im.exec(text);
+  if (!heading) return null;
   const following = text.slice(heading.index + heading[0].length);
-  const nextHeading = /^#{1,3}\s+/m.exec(following);
+  const nextHeading = /^#{1,3}\s*\S/m.exec(following);
   const section = (nextHeading ? following.slice(0, nextHeading.index) : following).trim();
-  if (!section) return [];
+  if (!section) return null;
 
   const lines = section.split(/\r?\n/).map(line => line.trim());
   const headerIndex = lines.findIndex((line, index) => tableRow(line) && index + 1 < lines.length && tableDivider(lines[index + 1]));
-  if (headerIndex < 0) return splitNotes(`Review Trades · Suggestions\n${section.replace(/\*\*/g, '')}`);
+  if (headerIndex < 0) return `Review Trades · Suggestions\n\n${section.replace(/\*\*/g, '')}`;
 
   const headers = tableCells(lines[headerIndex]).map(header => header.toLowerCase());
   const scenarioIndex = headers.findIndex(header => header.includes('scenario'));
   const signalIndex = headers.findIndex(header => header.startsWith('signal'));
   const planIndex = headers.findIndex(header => header.includes('response plan'));
+  if (scenarioIndex < 0 || signalIndex < 0 || planIndex < 0) return `Review Trades · Suggestions\n\n${section.replace(/\*\*/g, '')}`;
   const entries = lines.slice(headerIndex + 2).filter(tableRow).map(line => {
     const row = tableCells(line);
-    const title = `Review Trades · ${row[scenarioIndex] || 'Scenario'}`;
+    const title = `Future scenario: ${row[scenarioIndex] || 'Scenario'}`;
     const signal = `Signal: ${row[signalIndex] || 'Not specified'}`;
     const plan = `Response plan: ${row[planIndex] || 'Not specified'}`;
-    const combined = [title, signal, plan].join('\n');
-    return combined.length <= 140 ? [combined] : [
-      ...splitNotes(`${title}\n${signal}`),
-      ...splitNotes(`${title}\n${plan}`),
-    ];
+    return [title, signal, plan].join('\n');
   });
   const introduction = lines.slice(0, headerIndex).filter(Boolean).join(' ').replace(/\*\*/g, '');
-  return [
-    ...(introduction ? splitNotes(`Review Trades · Suggestions\n${introduction}`) : []),
-    ...entries.flat(),
-  ];
+  return ['Review Trades · Suggestions', introduction, ...entries].filter(Boolean).join('\n\n');
 }
 
 const reviewAssetKey = (value: string) => value.normalize('NFKC').trim().toUpperCase()
   .replace(/\.(SH|SZ|BJ)$/, '').replace(/[\s._-]+/g, '');
 
-function ReviewNotesButton({ notes, asset }: { notes: string[]; asset: string }) {
+function ReviewNotesButton({ note, asset }: { note: string; asset: string }) {
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
   const [savedRoute, setSavedRoute] = useState<string | null>(null);
@@ -259,7 +315,7 @@ function ReviewNotesButton({ notes, asset }: { notes: string[]; asset: string })
     setSaving(true);
     setError(null);
     try {
-      if (notes.some(note => note.length > 140)) throw new Error('A suggestion exceeds the 140-character note limit.');
+      if (note.length > 2000) throw new Error('The combined suggestion exceeds the 2,000-character note limit.');
       const trades = await apiRequest<Array<{ symbol: string; code?: string | null }>>('/api/trades');
       const query = reviewAssetKey(asset);
       const exact = trades.find(trade => [trade.symbol, trade.code].some(value => value && reviewAssetKey(value) === query));
@@ -269,15 +325,12 @@ function ReviewNotesButton({ notes, asset }: { notes: string[]; asset: string })
       const code = trade.code?.trim();
       const assetKey = code ? `code:${code}` : `symbol:${trade.symbol.trim().toUpperCase()}`;
       const queryString = new URLSearchParams({ asset_key: assetKey });
-      const existing = await apiRequest<Array<{ content: string }>>(`/api/asset-notes?${queryString}`);
-      const saved = new Set(existing.map(item => item.content));
-      for (const note of notes) {
-        if (saved.has(note)) continue;
+      const existing = await apiRequest<Array<{ content: string; source: string }>>(`/api/asset-notes?${queryString}`);
+      if (!existing.some(item => item.content === note && item.source === 'ai_review')) {
         await apiRequest('/api/asset-notes', {
           method: 'POST',
-          body: JSON.stringify({ asset_key: assetKey, content: note }),
+          body: JSON.stringify({ asset_key: assetKey, content: note, source: 'ai_review' }),
         });
-        saved.add(note);
       }
       setSavedRoute(code || trade.symbol.trim());
     } catch (cause) {
@@ -337,16 +390,20 @@ function AgentMarkdown({ text, reviewAsset }: { text: string; reviewAsset?: stri
       continue;
     }
 
-    const heading = line.match(/^#{1,3}\s+(.+)$/);
+    const heading = line.match(/^#{1,3}\s*(\S.*)$/);
     if (heading) {
-      section = heading[1].trim().toLowerCase();
+      section = heading[1].trim().toLowerCase().replace(/\s+/g, ' ');
+      if (section === 'marketing background') section = 'market background';
+      if (section === 'your traiding action') section = 'your trading action';
       finishSection();
       highlightConclusion = !isReviewReply && section === 'conclusion';
-      if (isReviewReply && ['conclusion', 'overview', 'detail', 'suggestion'].includes(section)) {
+      if (isReviewReply && ['conclusion', 'overview', 'market background', 'your trading action', 'detail', 'suggestion'].includes(section)) {
         activeSection = { name: section, items: [] };
         const icon = section === 'conclusion' ? <Sparkles size={15} />
           : section === 'overview' ? <BarChart2 size={14} />
-            : section === 'detail' ? <FileText size={14} /> : <Target size={14} />;
+            : section === 'market background' ? <LineChart size={14} />
+              : section === 'your trading action' ? <Activity size={14} />
+                : section === 'detail' ? <FileText size={14} /> : <Target size={14} />;
         addBlock(<h3 key={`h-${index}`} className={cn(
           'mb-2 flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-[0.08em]',
           section === 'conclusion' ? 'text-[#EE6C4D]' : 'text-[#0B2545]',
@@ -359,7 +416,7 @@ function AgentMarkdown({ text, reviewAsset }: { text: string; reviewAsset?: stri
     }
 
     if (isTableRow(line) && index + 1 < lines.length && isTableDivider(lines[index + 1])) {
-      const headers = cells(line);
+      const headers = section === 'market background' ? ['Indicator', 'Value'] : cells(line);
       const actionColumn = headers.findIndex(header => header.toLowerCase() === 'action');
       const displayHeaders = headers.map(header => header.toLowerCase() === 'signal to watch' ? 'Signal' : header);
       index += 2;
@@ -368,11 +425,19 @@ function AgentMarkdown({ text, reviewAsset }: { text: string; reviewAsset?: stri
         rows.push(cells(lines[index]));
         index += 1;
       }
+      const marketValues = new Map<string, string>();
+      if (section === 'market background') rows.forEach(row => {
+        const indicator = marketIndicatorName(row[0] || '');
+        if (indicator && !marketValues.has(indicator)) marketValues.set(indicator, formatMarketBackground(row[1] || '-'));
+      });
+      const visibleRows = section === 'market background'
+        ? MARKET_INDICATORS.map(indicator => [indicator, marketValues.get(indicator) || '-'])
+        : rows;
       addBlock(
         <div key={`t-${index}`} className="my-2 overflow-x-auto rounded-lg border border-slate-200 bg-white">
-          <table className="w-full min-w-[320px] text-left text-[10px]">
-            <thead className="bg-slate-50 text-slate-600"><tr>{displayHeaders.map((header, cellIndex) => <th key={cellIndex} className="px-2 py-1.5 font-bold">{header}</th>)}</tr></thead>
-            <tbody className="divide-y divide-slate-100 text-slate-700">{rows.map((row, rowIndex) => {
+          <table className={cn('min-w-full text-left text-[10px]', section === 'suggestion' ? 'w-full table-fixed' : 'w-max')}>
+            <thead className="bg-slate-50 text-slate-600"><tr>{displayHeaders.map((header, cellIndex) => <th key={cellIndex} className={cn('px-2 py-1.5 font-bold', section === 'overview' && /^(date|fill price|amount)$/i.test(header) && 'whitespace-nowrap', section === 'suggestion' && 'whitespace-normal break-words')}>{header}</th>)}</tr></thead>
+            <tbody className="divide-y divide-slate-100 text-slate-700">{visibleRows.map((row, rowIndex) => {
               const action = actionColumn >= 0 ? (row[actionColumn] || '').trim().toLowerCase() : '';
               const actionColor = ['buy', 'b', '买入'].includes(action)
                 ? 'text-emerald-700'
@@ -382,7 +447,10 @@ function AgentMarkdown({ text, reviewAsset }: { text: string; reviewAsset?: stri
               return <tr key={rowIndex}>{headers.map((header, cellIndex) => {
                 const normalizedHeader = header.toLowerCase();
                 const color = normalizedHeader === 'action' || normalizedHeader.includes('price') || normalizedHeader.includes('amount') ? actionColor : 'text-slate-700';
-                return <td key={cellIndex} className={`px-2 py-1.5 align-top ${color}`}>{row[cellIndex] || '—'}</td>;
+                const value = row[cellIndex] || '—';
+                const changeColor = section === 'market background' && cellIndex > 0 && ['Period Return', 'Entry Day Change', 'Exit Day Change'].includes(row[0] || '')
+                  ? marketChangeColor(value) : null;
+                return <td key={cellIndex} className={cn('px-2 py-1.5 align-top', changeColor || color, section === 'overview' && /^(date|fill price|amount)$/i.test(header) && 'whitespace-nowrap', section === 'suggestion' && 'whitespace-normal break-words', section === 'suggestion' && normalizedHeader.includes('scenario') && 'font-bold text-[#0B2545]')}>{section === 'market background' ? formatMarketBackground(value) : value}</td>;
               })}</tr>;
             })}</tbody>
           </table>
@@ -392,11 +460,14 @@ function AgentMarkdown({ text, reviewAsset }: { text: string; reviewAsset?: stri
     }
 
     const paragraph: string[] = [];
-    while (index < lines.length && lines[index].trim() && !/^#{1,3}\s+/.test(lines[index].trim()) && !isTableRow(lines[index].trim())) {
+    while (index < lines.length && lines[index].trim() && !/^#{1,3}\s*\S/.test(lines[index].trim()) && !isTableRow(lines[index].trim())) {
       paragraph.push(lines[index].trim());
       index += 1;
     }
-    const paragraphText = paragraph.join(' ');
+    const paragraphText = (section === 'market background'
+      ? paragraph.filter(line => !hiddenMarketBackgroundLabel(line)).map(formatMarketBackground)
+      : paragraph).join(' ');
+    if (!paragraphText) continue;
     const detailDate = section === 'detail' ? paragraphText.match(/^(?:[-*]\s*)?(?:\*\*)?(\d{4}-\d{2}-\d{2}):?(?:\*\*)?:?\s*(.*)$/) : null;
     if (detailDate) {
       addBlock(
@@ -418,8 +489,8 @@ function AgentMarkdown({ text, reviewAsset }: { text: string; reviewAsset?: stri
   }
   finishSection();
 
-  const notes = isReviewReply ? suggestionNotes(text) : [];
-  return <div className="w-[280px] max-w-full text-slate-700">{blocks}{notes.length > 0 && reviewAsset && <ReviewNotesButton notes={notes} asset={reviewAsset} />}</div>;
+  const note = isReviewReply ? suggestionNote(text) : null;
+  return <div className="w-[280px] max-w-full text-slate-700">{blocks}{note && reviewAsset && <ReviewNotesButton note={note} asset={reviewAsset} />}</div>;
 }
 
 type BacktestResult = {

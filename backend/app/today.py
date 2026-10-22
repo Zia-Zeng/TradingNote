@@ -28,14 +28,30 @@ from .portfolio_engine import roll_portfolio
 from .summary_market import a_share_major_indices, csi_index_change, csi_industry_context, csi_sector_performance
 from .tavily_mcp import search_market_news
 from .trade_review_route import route_trade_review
-from .storage import create_trade, database, list_trades, normalize_trade_note, update_trade
+from .storage import create_trade, database, get_market_history_cache, list_trades, normalize_trade_note, update_trade
 
 
 router = APIRouter(prefix="/api/today", tags=["today"])
 logger = logging.getLogger(__name__)
 
-PORTFOLIO_ENGINE_VERSION = 5
+PORTFOLIO_ENGINE_VERSION = 10
 PORTFOLIO_ACTIVE_CACHE_SECONDS = 300
+
+
+async def _portfolio_price_history(key: tuple[str, str, str], code: str, start: str, end: str) -> list[dict[str, Any]]:
+    """Use saved daily closes when a provider is unavailable or already checked."""
+    saved = get_market_history_cache(key[0], key[2], start, end)
+    coverage = saved["coverage"]
+    if saved["bars"] and coverage and coverage["checked_through"] >= end:
+        return saved["bars"]
+    try:
+        result = await fetch_daily_history(code, key[0], start, end)
+        return result.get("bars", []) or saved["bars"]
+    except Exception:
+        if saved["bars"]:
+            logger.warning("Using saved daily closes for %s after live history failed.", key[2])
+            return saved["bars"]
+        raise
 # Increment when Daily Summary rules or its visible output contract changes.
 DAILY_SUMMARY_VERSION = 8
 TRADE_REVIEW_NOTE_SCHEMA_VERSION = 3
@@ -552,11 +568,82 @@ async def import_holding_snapshot(payload: HoldingsImportRequest) -> dict[str, A
 
 def _portfolio_instrument_key(record: dict[str, Any]) -> tuple[str, str, str]:
     market = str(record.get("market") or "CN").upper()
+    if market in {"A-SHARE", "A_SHARE", "STOCK", "STOCKS"}:
+        market = "CN"
     currency = str(record.get("currency") or {"CN": "CNY", "HK": "HKD", "US": "USD", "CRYPTO": "USD"}.get(market, "")).upper()
     code = str(record.get("code") or record.get("symbol") or "").strip().upper()
     if market == "CN":
         code = code.removesuffix(".SH").removesuffix(".SZ").removesuffix(".BJ").removesuffix(".SS")
     return market, currency, code
+
+
+def _portfolio_trades_since_snapshot(snapshot: dict[str, Any], as_of: str) -> list[dict[str, Any]]:
+    """Include later fills and historical fills recorded after the snapshot upload."""
+    with database() as connection:
+        rows = connection.execute("SELECT payload, created_at FROM trades").fetchall()
+    result = []
+    for row in rows:
+        trade = normalize_trade_note(json.loads(row["payload"]))
+        trade_date = _record_trade_date(trade)
+        if trade_date and trade_date <= as_of and (
+            trade_date > snapshot["as_of"] or row["created_at"] > snapshot["imported_at"]
+        ):
+            result.append(trade)
+    return result
+
+
+def _portfolio_baseline_with_backfills(
+    snapshot: dict[str, Any], trades: list[dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+    """Replay newly recorded older fills into the opening holdings once."""
+    backfills = [trade for trade in trades if (_record_trade_date(trade) or "") <= snapshot["as_of"]]
+    later = [trade for trade in trades if (_record_trade_date(trade) or "") > snapshot["as_of"]]
+    if not backfills:
+        return snapshot, later, []
+
+    holdings: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for source in snapshot["rows"]:
+        key = _portfolio_instrument_key(source)
+        qty = float(source.get("quantity") or 0)
+        if qty <= 0:
+            continue
+        row = holdings.get(key)
+        if row is None:
+            row = dict(source)
+            row["quantity"] = 0.0
+            row["average_cost"] = 0.0
+            if source.get("market_price") is None and source.get("market_value") is not None:
+                row["market_price"] = float(source["market_value"]) / qty
+            row.pop("market_value", None)
+            holdings[key] = row
+        old_qty = float(row["quantity"])
+        row["average_cost"] = (old_qty * float(row.get("average_cost") or 0) + qty * float(source.get("average_cost") or 0)) / (old_qty + qty)
+        row["quantity"] = old_qty + qty
+
+    warnings = []
+    for trade in sorted(backfills, key=lambda item: (str(item.get("time") or item.get("date") or item.get("trade_date") or ""), str(item.get("id") or ""))):
+        key = _portfolio_instrument_key(trade)
+        qty = float(trade.get("qty") or 0)
+        price = float(trade.get("price") or 0)
+        if qty <= 0 or price <= 0:
+            continue
+        row = holdings.setdefault(key, {
+            "symbol": trade.get("symbol") or key[2], "code": trade.get("code") or key[2],
+            "market": key[0], "currency": key[1], "quantity": 0.0,
+            "average_cost": 0.0, "market_price": price,
+        })
+        held = float(row["quantity"])
+        if str(trade.get("type") or "").lower() == "buy":
+            row["average_cost"] = (held * float(row.get("average_cost") or 0) + qty * price + float(trade.get("fee") or 0)) / (held + qty)
+            row["quantity"] = held + qty
+        else:
+            if qty > held + 1e-9:
+                warnings.append(f"{trade.get('symbol') or key[2]}: a backfilled sell exceeds recorded holdings; only available shares were deducted.")
+            row["quantity"] = max(0.0, held - qty)
+            if row["quantity"] == 0:
+                row["average_cost"] = 0.0
+
+    return {**snapshot, "rows": [row for row in holdings.values() if row["quantity"] > 1e-9]}, later, warnings
 
 
 def _latest_close(bars: list[dict[str, Any]], cutoff: str) -> float | None:
@@ -775,7 +862,8 @@ async def get_portfolio_overview(as_of: date = Query()) -> dict[str, Any]:
             "imported_at": "", "total_assets": None, "total_assets_currency": None,
             "total_assets_as_of": baseline_date, "rows": [],
         }
-    trades = [trade for trade in list_trades() if snapshot["as_of"] < (_record_trade_date(trade) or "") <= as_of.isoformat()]
+    selected_trades = _portfolio_trades_since_snapshot(snapshot, as_of.isoformat())
+    snapshot, trades, backfill_warnings = _portfolio_baseline_with_backfills(snapshot, selected_trades)
     descriptors: dict[tuple[str, str, str], dict[str, str]] = {}
     for record in [*snapshot["rows"], *trades]:
         key = _portfolio_instrument_key(record)
@@ -786,8 +874,7 @@ async def get_portfolio_overview(as_of: date = Query()) -> dict[str, Any]:
     async def load_price_history(key: tuple[str, str, str], descriptor: dict[str, str]) -> tuple[tuple[str, str, str], list[dict[str, Any]]]:
         async with semaphore:
             try:
-                result = await fetch_daily_history(descriptor["code"], descriptor["market"], start, as_of.isoformat())
-                return key, result.get("bars", [])
+                return key, await _portfolio_price_history(key, descriptor["code"], start, as_of.isoformat())
             except Exception:
                 return key, []
 
@@ -803,9 +890,11 @@ async def get_portfolio_overview(as_of: date = Query()) -> dict[str, Any]:
             close = holding.get("market_price")
             if close is None:
                 close = _latest_close(dict(loaded).get(key, []), snapshot["as_of"])
+            qty = float(holding.get("quantity") or 0)
+            if close is None and qty > 0 and holding.get("market_value") is not None:
+                close = float(holding["market_value"]) / qty
             if close is None:
                 continue
-            qty = float(holding.get("quantity") or 0)
             value = qty * float(close)
             currency = key[1]
             market_values[currency] = market_values.get(currency, 0.0) + value
@@ -816,7 +905,9 @@ async def get_portfolio_overview(as_of: date = Query()) -> dict[str, Any]:
             initial_cash = float(snapshot["total_assets"]) - market_values[currency]
         latest_state = {"date": snapshot["as_of"], "cash_by_currency": {snapshot.get("total_assets_currency") or "CNY": float(initial_cash or 0)}, "holdings_market_value_by_currency": market_values, "total_assets_by_currency": {snapshot.get("total_assets_currency") or "CNY": float(snapshot.get("total_assets") or 0)}, "total_assets_complete": initial_cash is not None, "holding_pnl_by_currency": {}, "positions": positions, "complete": len(positions) == len(snapshot["rows"])}
     if latest_state is None:
-        return _calculate_portfolio_overview(snapshot, trades, dict(loaded), as_of.isoformat())
+        result = _calculate_portfolio_overview(snapshot, trades, dict(loaded), as_of.isoformat())
+        result["warnings"].extend(backfill_warnings)
+        return result
     categories: dict[str, dict[str, Any]] = {}
     for position in latest_state["positions"]:
         category = _overview_category(position)
@@ -846,7 +937,7 @@ async def get_portfolio_overview(as_of: date = Query()) -> dict[str, Any]:
         "realized_pnl_to_date_by_currency": latest_state.get("realized_pnl_to_date_by_currency", {}),
         "positions": latest_state["positions"],
         "categories": [{**item, "value_by_currency": {ccy: round(value, 2) for ccy, value in item["value_by_currency"].items()}} for item in categories.values()],
-        "positions_count": len(latest_state["positions"]), "warnings": [*rolled.get("warnings", []), *([result_warning] if result_warning else [])],
+        "positions_count": len(latest_state["positions"]), "warnings": [*rolled.get("warnings", []), *backfill_warnings, *([result_warning] if result_warning else [])],
     }
     if account_count > 1:
         result["warnings"].append("Multiple legacy accounts exist; this overview uses the default account or latest snapshot.")
@@ -1163,8 +1254,8 @@ def _cached_portfolio_response(
         },
         "warnings": warnings,
         "incomplete_dates": [day["date"] for day in days if not day.get("complete")],
-        "source": "Yahoo Finance first, then BaoStock/AkShare/Wind for A-shares; Wind then Yahoo for US stocks; Yahoo for other tickers",
-        "currency_policy": "Original currencies are retained; no FX conversion is applied.",
+        "source": "Wind then BaoStock/AkShare/Yahoo for A-shares; Yahoo then Wind for US stocks; Yahoo for Hong Kong and other tickers",
+        "currency_policy": "Original currency amounts are retained; daily P&L colors use historical FX closes converted to CNY.",
         "cache_hit": True,
     }
 
@@ -1188,11 +1279,11 @@ async def get_portfolio_pnl(
         if (trade_date := _record_trade_date(trade))
         and trade_date <= end_date.isoformat()
     ]
+    first_trade_date = min((_record_trade_date(trade) for trade in ledger_trades), default=None)
     if not snapshots and ledger_trades:
         # A complete dated trade ledger is now the portfolio baseline. Rebuild
         # positions from its first transaction instead of requiring an account
         # screenshot snapshot before P&L can be calculated.
-        first_trade_date = min(_record_trade_date(trade) for trade in ledger_trades)
         baseline_date = (date.fromisoformat(first_trade_date) - timedelta(days=1)).isoformat()
         snapshots = [{
             "id": "trade-ledger-baseline",
@@ -1239,8 +1330,18 @@ async def get_portfolio_pnl(
     # dated transactions. Later snapshots remain stored as source evidence but
     # are not silently mixed into the roll-forward.
     relevant_snapshots = [baseline]
-    trades = [trade for trade in list_trades() if baseline["as_of"] < (_record_trade_date(trade) or "") <= end_date.isoformat()]
-    source_fingerprint = _portfolio_source_fingerprint(baseline, trades)
+    selected_trades = _portfolio_trades_since_snapshot(baseline, end_date.isoformat())
+    baseline, trades, backfill_warnings = _portfolio_baseline_with_backfills(baseline, selected_trades)
+    history_baseline = None
+    history_trades = []
+    if first_trade_date and first_trade_date < baseline["as_of"] and baseline["id"] != "trade-ledger-baseline":
+        history_baseline = {
+            "as_of": (date.fromisoformat(first_trade_date) - timedelta(days=1)).isoformat(),
+            "rows": [], "total_assets": None, "total_assets_currency": None, "initial_cash": None,
+        }
+        history_trades = [trade for trade in ledger_trades if _record_trade_date(trade) <= baseline["as_of"]]
+    calendar_baseline_date = first_trade_date if history_baseline or baseline["id"] == "trade-ledger-baseline" else baseline["as_of"]
+    source_fingerprint = _portfolio_source_fingerprint(baseline, [*selected_trades, *history_trades])
     with database() as connection:
         cached_rows = connection.execute(
             "SELECT state_date, payload, input_fingerprint, computed_at, engine_version, source_fingerprint, computed_through FROM today_portfolio_daily_states WHERE account = ? ORDER BY state_date",
@@ -1256,14 +1357,17 @@ async def get_portfolio_pnl(
     for trade in trades:
         key = _portfolio_instrument_key(trade)
         descriptors.setdefault(key, {"code": trade.get("code") or trade.get("symbol"), "market": key[0]})
+    for trade in history_trades:
+        key = _portfolio_instrument_key(trade)
+        descriptors.setdefault(key, {"code": trade.get("code") or trade.get("symbol"), "market": key[0]})
 
-    history_start = (date.fromisoformat(baseline["as_of"]) - timedelta(days=14)).isoformat()
+    history_start = (date.fromisoformat(history_baseline["as_of"] if history_baseline else baseline["as_of"]) - timedelta(days=14)).isoformat()
     semaphore = asyncio.Semaphore(5)
     async def load_prices(key: tuple[str, str, str], descriptor: dict[str, Any]) -> tuple[tuple[str, str, str], list[dict[str, Any]] | None, str | None]:
         async with semaphore:
             try:
-                result = await fetch_daily_history(str(descriptor["code"]), descriptor["market"], history_start, end_date)
-                return key, result.get("bars", []), None
+                bars = await _portfolio_price_history(key, str(descriptor["code"]), history_start, end_date.isoformat())
+                return key, bars, None
             except Exception as exc:
                 return key, None, str(exc)[:240]
 
@@ -1271,7 +1375,24 @@ async def get_portfolio_pnl(
     prices = {key: bars for key, bars, _ in loaded if bars is not None}
     unavailable = [(descriptors[key].get("code") or key[2], error) for key, bars, error in loaded if bars is None or not bars]
     result = roll_portfolio(baseline, trades, prices, end_date.isoformat())
-    all_days = result["days"]
+    result["warnings"].extend(backfill_warnings)
+    all_days = [day for day in result["days"] if baseline["id"] != "trade-ledger-baseline" or day["date"] > first_trade_date]
+    if history_baseline:
+        history_result = roll_portfolio(history_baseline, history_trades, prices, baseline["as_of"])
+        result["warnings"].extend(history_result["warnings"][1:])
+        history_days = [day for day in history_result["days"] if day["date"] > first_trade_date]
+        if history_days and history_days[-1]["date"] == baseline["as_of"]:
+            historical_positions = {_portfolio_instrument_key(row): float(row["quantity"]) for row in history_days[-1]["daily_state"]["positions"]}
+            snapshot_positions = {_portfolio_instrument_key(row): float(row["quantity"]) for row in baseline["rows"]}
+            if any(abs(historical_positions.get(key, 0) - snapshot_positions.get(key, 0)) > 1e-8 for key in historical_positions.keys() | snapshot_positions.keys()):
+                history_days[-1]["complete"] = False
+                history_days[-1]["daily_state"]["complete"] = False
+                history_days[-1]["snapshot_mismatch"] = True
+                history_days[-1]["reason"] = "snapshot_mismatch"
+                result["warnings"].append("Historical trade holdings do not match the confirmed snapshot on its date; that day's ledger P&L is partial.")
+        all_days = [*history_days, *all_days]
+        result["warnings"].append("Days before the holdings snapshot are reconstructed from recorded trades and available closing prices.")
+    result["baseline_date"] = calendar_baseline_date
     fx_currencies = sorted({currency for day in all_days for currency in day.get("pnl_by_currency", {}) if currency != "CNY"})
 
     async def load_fx(currency: str) -> tuple[str, list[dict[str, Any]]]:
@@ -1316,14 +1437,14 @@ async def get_portfolio_pnl(
         result["warnings"].insert(0, "Closing-price history unavailable for: " + details + (" and others." if len(unavailable) > 8 else "."))
     if missing_fx:
         result["warnings"].insert(0, "FX conversion to CNY unavailable for: " + ", ".join(missing_fx) + ". Calendar colors are neutral until rates are available.")
-    result["source"] = "Yahoo Finance first, then BaoStock/AkShare/Wind for A-shares; Wind then Yahoo for US stocks; Yahoo for other tickers"
+    result["source"] = "Wind then BaoStock/AkShare/Yahoo for A-shares; Yahoo then Wind for US stocks; Yahoo for Hong Kong and other tickers"
     result["currency_policy"] = "Original currency amounts are retained; daily P&L colors use historical FX closes converted to CNY."
     result["cache_hit"] = False
     with database() as connection:
         connection.execute("DELETE FROM today_portfolio_daily_states WHERE account = ?", (baseline["account"],))
         connection.executemany(
             "INSERT INTO today_portfolio_daily_states (account, state_date, payload, input_fingerprint, computed_at, engine_version, source_fingerprint, computed_through) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [(baseline["account"], day["date"], json.dumps({**day, "baseline_date": baseline["as_of"], "calculation_warnings": result["warnings"]}, ensure_ascii=False), state_fingerprint, computed_at, PORTFOLIO_ENGINE_VERSION, source_fingerprint, end_date.isoformat()) for day in all_days],
+            [(baseline["account"], day["date"], json.dumps({**day, "baseline_date": calendar_baseline_date, "calculation_warnings": result["warnings"]}, ensure_ascii=False), state_fingerprint, computed_at, PORTFOLIO_ENGINE_VERSION, source_fingerprint, end_date.isoformat()) for day in all_days],
         )
     return result
 

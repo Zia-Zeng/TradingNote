@@ -72,11 +72,29 @@ def initialize_storage() -> None:
                 id TEXT PRIMARY KEY,
                 asset_key TEXT NOT NULL,
                 content TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'manual'
             );
 
             CREATE INDEX IF NOT EXISTS idx_asset_notes_asset_created
             ON asset_notes(asset_key, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS market_daily_bars (
+                market TEXT NOT NULL,
+                code TEXT NOT NULL,
+                date TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                PRIMARY KEY (market, code, date)
+            );
+
+            CREATE TABLE IF NOT EXISTS market_history_coverage (
+                market TEXT NOT NULL,
+                code TEXT NOT NULL,
+                start_date TEXT NOT NULL,
+                checked_through TEXT NOT NULL,
+                source TEXT NOT NULL,
+                PRIMARY KEY (market, code)
+            );
 
             CREATE TABLE IF NOT EXISTS daily_feeds (
                 feed_date TEXT PRIMARY KEY,
@@ -84,6 +102,46 @@ def initialize_storage() -> None:
                 created_at TEXT NOT NULL
             );
             """
+        )
+        if "source" not in {row["name"] for row in connection.execute("PRAGMA table_info(asset_notes)")}:
+            connection.execute("ALTER TABLE asset_notes ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
+            connection.execute(
+                "UPDATE asset_notes SET source = 'ai_review' WHERE content LIKE 'Review Trades · %'"
+            )
+
+
+def get_market_history_cache(market: str, code: str, start: str, end: str) -> dict[str, Any]:
+    with database() as connection:
+        coverage = connection.execute(
+            "SELECT start_date, checked_through, source FROM market_history_coverage WHERE market = ? AND code = ?",
+            (market, code),
+        ).fetchone()
+        rows = connection.execute(
+            "SELECT payload FROM market_daily_bars WHERE market = ? AND code = ? AND date BETWEEN ? AND ? ORDER BY date",
+            (market, code, start, end),
+        ).fetchall()
+    return {"coverage": dict(coverage) if coverage else None, "bars": [json.loads(row["payload"]) for row in rows]}
+
+
+def save_market_history_segment(
+    market: str, code: str, start: str, end: str, source: str, bars: list[dict[str, Any]],
+) -> None:
+    with database() as connection:
+        connection.executemany(
+            "INSERT OR REPLACE INTO market_daily_bars (market, code, date, payload) VALUES (?, ?, ?, ?)",
+            [
+                (market, code, bar["date"], json.dumps(bar, ensure_ascii=False))
+                for bar in bars if start <= str(bar.get("date", "")) <= end
+            ],
+        )
+        coverage = connection.execute(
+            "SELECT start_date, checked_through FROM market_history_coverage WHERE market = ? AND code = ?",
+            (market, code),
+        ).fetchone()
+        connection.execute(
+            "INSERT OR REPLACE INTO market_history_coverage (market, code, start_date, checked_through, source) VALUES (?, ?, ?, ?, ?)",
+            (market, code, min(start, coverage["start_date"]) if coverage else start,
+             max(end, coverage["checked_through"]) if coverage else end, source),
         )
 
 
@@ -299,37 +357,38 @@ def delete_trade(trade_id: str) -> bool:
 def list_asset_notes(asset_key: str) -> list[dict[str, str]]:
     with database() as connection:
         rows = connection.execute(
-            "SELECT id, asset_key, content, created_at FROM asset_notes WHERE asset_key = ? ORDER BY created_at DESC, rowid DESC",
+            "SELECT id, asset_key, content, created_at, source FROM asset_notes WHERE asset_key = ? ORDER BY created_at DESC, rowid DESC",
             (asset_key,),
         ).fetchall()
     return [dict(row) for row in rows]
 
 
-def create_asset_note(asset_key: str, content: str) -> dict[str, str]:
+def create_asset_note(asset_key: str, content: str, source: str = "manual") -> dict[str, str]:
     note = {
         "id": str(uuid4()),
         "asset_key": asset_key,
         "content": content,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "source": source,
     }
     with database() as connection:
         connection.execute(
-            "INSERT INTO asset_notes (id, asset_key, content, created_at) VALUES (?, ?, ?, ?)",
-            (note["id"], note["asset_key"], note["content"], note["created_at"]),
+            "INSERT INTO asset_notes (id, asset_key, content, created_at, source) VALUES (?, ?, ?, ?, ?)",
+            (note["id"], note["asset_key"], note["content"], note["created_at"], note["source"]),
         )
     return note
 
 
-def update_asset_note(note_id: str, asset_key: str, content: str) -> dict[str, str] | None:
+def update_asset_note(note_id: str, asset_key: str, content: str, source: str = "manual") -> dict[str, str] | None:
     with database() as connection:
         cursor = connection.execute(
-            "UPDATE asset_notes SET content = ? WHERE id = ? AND asset_key = ?",
-            (content, note_id, asset_key),
+            "UPDATE asset_notes SET content = ? WHERE id = ? AND asset_key = ? AND source = ?",
+            (content, note_id, asset_key, source),
         )
         if not cursor.rowcount:
             return None
         row = connection.execute(
-            "SELECT id, asset_key, content, created_at FROM asset_notes WHERE id = ?",
+            "SELECT id, asset_key, content, created_at, source FROM asset_notes WHERE id = ?",
             (note_id,),
         ).fetchone()
     return dict(row) if row else None

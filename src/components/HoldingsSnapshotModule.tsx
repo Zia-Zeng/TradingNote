@@ -1,8 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { BriefcaseBusiness, FileUp } from 'lucide-react';
 import { formatCurrencyAmount } from '../lib/instruments';
 import { localDate } from '../lib/daily-notes';
-import type { DailyPnlDay, DailyPnlResult } from '../lib/daily-pnl';
+import { getPortfolioOverview, type DailyPnlDay, type DailyPnlResult, type PortfolioOverview } from '../lib/daily-pnl';
 import AssetHistoryImportDrawer from './AssetHistoryImportDrawer';
 
 function formatAmounts(amounts: Record<string, number> | undefined, signed = false): string {
@@ -57,15 +57,28 @@ export default function HoldingsSnapshotModule({ pnl, loading, error }: {
   error: string;
 }) {
   const [importOpen, setImportOpen] = useState(false);
+  const [overview, setOverview] = useState<PortfolioOverview | null>(null);
+  const [overviewLoading, setOverviewLoading] = useState(true);
   const asOf = localDate();
   const latestDay = useMemo(() => mostRecentSession(pnl?.days || [], asOf), [pnl, asOf]);
   const state = latestDay?.daily_state;
+  useEffect(() => {
+    let active = true;
+    setOverviewLoading(true);
+    getPortfolioOverview(asOf)
+      .then(result => { if (active) setOverview(result); })
+      .catch(() => { if (active) setOverview(null); })
+      .finally(() => { if (active) setOverviewLoading(false); });
+    return () => { active = false; };
+  }, [asOf, pnl]);
   const monthPnl = useMemo(() => sumMonth(pnl?.days || [], asOf.slice(0, 7), asOf), [pnl, asOf]);
-  const positionValue = formatAmounts(state?.holdings_market_value_by_currency);
+  const positionAmounts = Object.keys(overview?.holdings_market_value_by_currency || {}).length
+    ? overview?.holdings_market_value_by_currency : state?.holdings_market_value_by_currency;
+  const positionValue = formatAmounts(positionAmounts);
   const dailyValue = latestDay?.complete ? formatAmounts(latestDay.pnl_by_currency, true) : '—';
   const monthValue = monthPnl.complete ? formatAmounts(monthPnl.amounts, true) : '—';
   const holdingValue = state?.complete ? formatAmounts(state.holding_pnl_by_currency, true) : '—';
-  const hasPortfolioHistory = Boolean(pnl?.baseline_date);
+  const hasPortfolioHistory = Boolean(pnl?.baseline_date || overview?.snapshot_date);
 
   return <>
     <section className="rounded-xl border border-slate-100 bg-white p-3 shadow-[0_4px_16px_rgba(11,37,69,0.05)]">
@@ -74,15 +87,15 @@ export default function HoldingsSnapshotModule({ pnl, loading, error }: {
         <button onClick={() => setImportOpen(true)} className="flex shrink-0 items-center gap-1 rounded-md bg-[#0B2545] px-2 py-1.5 text-[9px] font-bold text-white"><FileUp size={11} /> Import asset history</button>
       </div>
 
-      {loading ? <p className="py-3 text-[10px] text-slate-400">Calculating portfolio…</p> : error ? <p role="alert" className="py-2 text-[10px] text-rose-600">{error}</p> : !hasPortfolioHistory ? <p className="rounded-lg bg-slate-50 p-3 text-[10px] leading-relaxed text-slate-500">Choose a security and import its complete trade history. The ledger will be saved and used to calculate open positions and P&amp;L.</p> : <>
+      {(loading || overviewLoading) && !overview && !state ? <p className="py-3 text-[10px] text-slate-400">Calculating portfolio…</p> : error && !overview ? <p role="alert" className="py-2 text-[10px] text-rose-600">{error}</p> : !hasPortfolioHistory ? <p className="rounded-lg bg-slate-50 p-3 text-[10px] leading-relaxed text-slate-500">Choose a security and import its complete trade history. The ledger will be saved and used to calculate open positions and P&amp;L.</p> : <>
         <div className="flex items-end justify-between gap-2 border-b border-slate-100 pb-1">
           <div className="min-w-0">
             <div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Position Market Value</div>
             <div className="mt-0.5 min-w-0 font-mono font-bold leading-tight text-[#0B2545]">
-              <AmountList amounts={state?.holdings_market_value_by_currency} title={positionValue} singleClassName="block truncate text-[22px]" multipleClassName="text-[15px]" />
+              <AmountList amounts={positionAmounts} title={positionValue} singleClassName="block truncate text-[22px]" multipleClassName="text-[15px]" />
             </div>
           </div>
-          <span className="shrink-0 pb-0.5 text-[8px] font-mono text-slate-400">{latestDay?.date || asOf}</span>
+          <span className="shrink-0 pb-0.5 text-[8px] font-mono text-slate-400">{overview?.holdings_market_value_estimated ? 'Estimated · ' : ''}{overview?.as_of || latestDay?.date || asOf}</span>
         </div>
         <div className="grid grid-cols-3 gap-2 pt-1">
           <div className="min-w-0">

@@ -41,6 +41,12 @@ function TagList({ tags }: { tags: string[] }) {
   );
 }
 
+function ArticleTitle({ title }: { title: string }) {
+  const colon = title.indexOf(':');
+  if (colon < 1) return <>{title}</>;
+  return <><em>{title.slice(0, colon)}</em>{title.slice(colon)}</>;
+}
+
 export default function Feed() {
   const { articleIndex: articleIndexParam } = useParams();
   const navigate = useNavigate();
@@ -102,10 +108,10 @@ export default function Feed() {
             <>
               <div className="mb-3 flex items-center gap-2">
                 <Heart size={15} className="text-[#D9795B]" />
-                <span className="text-[10px] font-bold uppercase tracking-[0.17em] text-[#D9795B]">{selectedArticle.book}</span>
+                <span className="text-[10px] font-bold italic uppercase tracking-[0.17em] text-[#D9795B]">{selectedArticle.book}</span>
               </div>
               <h1 className="font-serif text-[27px] font-bold leading-[1.16] text-[#18263A]">
-                {selectedArticle.title}
+                <ArticleTitle title={selectedArticle.title} />
               </h1>
               <div className="mt-4"><TagList tags={selectedArticle.tags} /></div>
             </>
@@ -120,9 +126,11 @@ export default function Feed() {
               <div className="mb-4 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-[#A89B91]">
                 <BookOpen size={13} /> {formattedDate}
               </div>
-              <p className="whitespace-pre-line font-serif text-[15px] leading-[1.9] text-[#4E5359]">
-                {selectedArticle.body}
-              </p>
+              <div className="space-y-5">
+                {selectedArticle.body.split(/\n\s*\n/).filter(Boolean).map((paragraph, index) => (
+                  <p key={index} className="font-serif text-[15px] leading-[1.9] text-[#4E5359]">{paragraph}</p>
+                ))}
+              </div>
             </article>
           )}
           {!loading && !error && !selectedArticle && <NotFoundState onBack={() => navigate('/feed')} />}
@@ -169,7 +177,7 @@ export default function Feed() {
             />
             <div className="min-w-0 flex-1">
               <h2 className="font-serif text-[17px] font-bold leading-[1.25] text-[#18263A]">
-                {article.title}
+                <ArticleTitle title={article.title} />
               </h2>
               <div className="mt-2"><TagList tags={article.tags} /></div>
               <p className="mt-2 line-clamp-3 font-serif text-[12px] leading-[1.6] text-[#686B6E]">

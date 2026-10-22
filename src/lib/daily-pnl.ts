@@ -40,6 +40,13 @@ export type DailyPnlResult = {
   currency_policy?: string;
 };
 
+export type PortfolioOverview = {
+  snapshot_date: string | null;
+  as_of: string;
+  holdings_market_value_by_currency: Record<string, number>;
+  holdings_market_value_estimated?: boolean;
+};
+
 export const PORTFOLIO_SNAPSHOT_CHANGED = 'tradingnote:portfolio-snapshot-changed';
 
 export type PortfolioSnapshotChangedDetail = { date?: string };
@@ -51,4 +58,8 @@ export function notifyPortfolioSnapshotChanged(date?: string) {
 export function getDailyPnl(startDate: string, endDate: string): Promise<DailyPnlResult> {
   const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
   return apiRequest<DailyPnlResult>(`/api/today/portfolio/pnl?${params.toString()}`);
+}
+
+export function getPortfolioOverview(asOf: string): Promise<PortfolioOverview> {
+  return apiRequest<PortfolioOverview>(`/api/today/portfolio/overview?as_of=${encodeURIComponent(asOf)}`);
 }

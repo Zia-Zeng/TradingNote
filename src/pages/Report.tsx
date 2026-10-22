@@ -37,7 +37,31 @@ type Position = {
 };
 
 type DailyBar = { date: string; open?: number; high?: number; low?: number; close: number };
-type DailyHistory = { bars: DailyBar[] };
+type DailyHistory = { bars: DailyBar[]; refresh_failed?: boolean };
+type CachedDailyHistory = { endDate: string; cachedAt: number; data: DailyHistory };
+const MARKET_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const marketCacheKey = (position: Position) => `tradingnote:portfolio-market:${position.market}:${position.code || position.name}`;
+
+const readMarketCache = (position: Position): CachedDailyHistory | null => {
+  try {
+    const raw = localStorage.getItem(marketCacheKey(position));
+    if (!raw) return null;
+    const cached = JSON.parse(raw) as CachedDailyHistory;
+    const age = Date.now() - cached.cachedAt;
+    return age >= 0 && age <= MARKET_CACHE_MAX_AGE_MS && Array.isArray(cached.data?.bars) && cached.data.bars.length > 0 ? cached : null;
+  } catch {
+    return null;
+  }
+};
+
+const saveMarketCache = (position: Position, endDate: string, data: DailyHistory) => {
+  if (!data.bars.length) return;
+  try {
+    localStorage.setItem(marketCacheKey(position), JSON.stringify({ endDate, cachedAt: Date.now(), data }));
+  } catch {
+    // The server cache remains available if browser storage is disabled.
+  }
+};
 
 const localDate = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
 
@@ -72,6 +96,7 @@ function MiniCandles({ bars }: { bars: DailyBar[] }) {
 
 function LatestMarket({ history, loading }: { history?: DailyHistory; loading: boolean }) {
   const bars = Array.isArray(history?.bars) ? history.bars.filter(bar => Number.isFinite(bar.close)) : [];
+  const awaitingFirstResult = loading && bars.length === 0;
   const latest = bars[bars.length - 1];
   const previous = bars[bars.length - 2];
   const percent = latest && previous?.close ? (latest.close - previous.close) / previous.close * 100 : null;
@@ -80,16 +105,17 @@ function LatestMarket({ history, loading }: { history?: DailyHistory; loading: b
   const change = percent === null ? '--' : `${percent > 0 ? '+' : ''}${percent.toFixed(2)}%`;
 
   return <div className="flex shrink-0 items-center gap-1.5" aria-label={latest ? `Latest close ${price} on ${latest.date}; change ${change}` : 'Daily market data unavailable'}>
-    <div className="flex h-8 w-[66px] items-center justify-center">{loading ? <span className="text-[9px] text-slate-400">Loading</span> : <MiniCandles bars={bars} />}</div>
+    <div className="flex h-8 w-[66px] items-center justify-center">{awaitingFirstResult ? <span className="text-[9px] text-slate-400">Loading</span> : <MiniCandles bars={bars} />}</div>
     <div className="flex w-[57px] flex-col items-end gap-0.5">
-      <span className="font-mono text-[12px] font-bold leading-none text-[#0B2545]" title={latest ? `Close · ${latest.date}` : 'Close unavailable'}>{loading ? '--' : price}</span>
-      <span className={cn('w-full rounded-sm px-1 py-0.5 text-center font-mono text-[9px] font-bold leading-none text-white', movement === 'up' ? 'bg-emerald-500' : movement === 'down' ? 'bg-rose-500' : 'bg-slate-400')} title={latest ? `Daily change · ${latest.date}` : 'Daily change unavailable'}>{loading ? '--' : change}</span>
+      <span className="font-mono text-[12px] font-bold leading-none text-[#0B2545]" title={latest ? `Close · ${latest.date}` : 'Close unavailable'}>{awaitingFirstResult ? '--' : price}</span>
+      <span className={cn('w-full rounded-sm px-1 py-0.5 text-center font-mono text-[9px] font-bold leading-none text-white', movement === 'up' ? 'bg-emerald-500' : movement === 'down' ? 'bg-rose-500' : 'bg-slate-400')} title={latest ? `Daily change · ${latest.date}` : 'Daily change unavailable'}>{awaitingFirstResult ? '--' : change}</span>
     </div>
   </div>;
 }
 
 function PositionPnl({ position, history, loading }: { position: Position; history?: DailyHistory; loading: boolean }) {
   const bars = history?.bars || [];
+  const awaitingFirstResult = loading && bars.length === 0;
   const latestClose = bars[bars.length - 1]?.close;
   const pnlValue = typeof latestClose === 'number' && Number.isFinite(latestClose)
     ? (latestClose - position.averageCost) * position.quantity
@@ -103,8 +129,8 @@ function PositionPnl({ position, history, loading }: { position: Position; histo
     : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
 
   return <>
-    <div className="min-w-0"><p className="truncate text-[9px] text-slate-400">PNL Value</p><p className={cn('truncate font-mono text-[10px] font-bold', color)}>{loading ? '--' : formatCurrencyAmount(pnlValue ?? undefined, position.currency)}</p></div>
-    <div className="min-w-0"><p className="truncate text-[9px] text-slate-400">PNL %</p><p className={cn('truncate font-mono text-[10px] font-bold', color)}>{loading ? '--' : formatPercent(pnlPercent)}</p></div>
+    <div className="min-w-0"><p className="truncate text-[9px] text-slate-400">PNL Value</p><p className={cn('truncate font-mono text-[10px] font-bold', color)}>{awaitingFirstResult ? '--' : formatCurrencyAmount(pnlValue ?? undefined, position.currency)}</p></div>
+    <div className="min-w-0"><p className="truncate text-[9px] text-slate-400">PNL %</p><p className={cn('truncate font-mono text-[10px] font-bold', color)}>{awaitingFirstResult ? '--' : formatPercent(pnlPercent)}</p></div>
   </>;
 }
 
@@ -225,12 +251,24 @@ export default function Report() {
     const start = new Date(end);
     start.setDate(start.getDate() - 35);
     const dates = { start_date: localDate(start), end_date: localDate(end) };
-    setMarketLoadingByKey(Object.fromEntries(positions.map(position => [position.key, true])));
+    const cachedByKey = new Map(positions.map(position => [position.key, readMarketCache(position)] as const));
+    setMarketByKey(Object.fromEntries(positions.flatMap(position => {
+      const cached = cachedByKey.get(position.key);
+      return cached ? [[position.key, cached.data]] : [];
+    })));
+    setMarketLoadingByKey(Object.fromEntries(positions.map(position => [position.key, !cachedByKey.get(position.key)])));
     for (const position of positions) {
+      const cached = cachedByKey.get(position.key);
+      if (cached?.endDate === dates.end_date) continue;
+      if (cached) setMarketLoadingByKey(current => ({ ...current, [position.key]: true }));
       const query = new URLSearchParams({ ...dates, code: position.code || position.name, market: position.market });
       void apiRequest<DailyHistory>(`/api/market/daily?${query}`)
-        .then(history => { if (!cancelled) setMarketByKey(current => ({ ...current, [position.key]: history })); })
-        .catch(() => { if (!cancelled) setMarketByKey(current => { const next = { ...current }; delete next[position.key]; return next; }); })
+        .then(history => {
+          if (cancelled) return;
+          if (!history.refresh_failed) saveMarketCache(position, dates.end_date, history);
+          if (history.bars.length || !cached) setMarketByKey(current => ({ ...current, [position.key]: history }));
+        })
+        .catch(() => { if (!cancelled && !cached) setMarketByKey(current => { const next = { ...current }; delete next[position.key]; return next; }); })
         .finally(() => { if (!cancelled) setMarketLoadingByKey(current => ({ ...current, [position.key]: false })); });
     }
     return () => { cancelled = true; };

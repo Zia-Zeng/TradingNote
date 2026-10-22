@@ -104,9 +104,9 @@ class EastmoneySearchTests(unittest.TestCase):
         self.assertEqual(result["bars"], [{"date": "2026-10-19", "close": 100.25, "open": 99.5, "high": 101.0, "low": 98.75}])
 
     @patch("app.market_data._yahoo_history")
-    def test_mainland_history_uses_yahoo_when_regional_sources_are_unavailable(self, yahoo_history):
+    def test_mainland_history_can_use_configured_yahoo_provider(self, yahoo_history):
         yahoo_history.return_value = {"bars": [{"date": "2026-10-16", "close": 25.0}]}
-        with patch.dict("os.environ", {"MARKET_DATA_PROVIDER_ORDER": ""}), patch("app.market_data.run_in_threadpool", new=_run_in_threadpool_inline):
+        with patch.dict("os.environ", {"MARKET_DATA_PROVIDER_ORDER": "yahoo"}), patch("app.market_data.run_in_threadpool", new=_run_in_threadpool_inline):
             result = asyncio.run(market_data.fetch_a_share_history("601899", "2026-10-10", "2026-10-18"))
         yahoo_history.assert_called_once_with("601899.SS", "2026-10-10", "2026-10-18")
         self.assertEqual(result["latest_close"], 25.0)
@@ -245,8 +245,8 @@ class TradeNoteCompatibilityTests(unittest.TestCase):
         self.assertEqual(normalized["note_tags"], ["Breakout"])
         self.assertIn("Observed volume increase", normalized["note"])
         self.assertIn("Bought after confirmation", normalized["note"])
-        self.assertIn("止盈：12", normalized["note"])
-        self.assertIn("止损：9", normalized["note"])
+        self.assertIn("Take profit: 12", normalized["note"])
+        self.assertIn("Stop loss: 9", normalized["note"])
         self.assertIn("Review after earnings", normalized["note"])
         self.assertNotIn("motive", normalized)
         self.assertNotIn("plan", normalized)
@@ -457,11 +457,7 @@ class SeparateDailyGenerationTests(unittest.IsolatedAsyncioTestCase):
             "portfolio_result": {"complete": True, "pnl_by_currency": {"CNY": 12}, "attribution": []},
             "portfolio_warnings": [], "market_benchmarks": [], "industry_performance": [], "industry_status": "unavailable",
         }
-        narrative_json = json.dumps({
-            "market_narrative": "市场行情暂不可用。",
-            "portfolio_narrative": "京东方A为当日主要正贡献标的。",
-            "insight": "",
-        }, ensure_ascii=False)
+        narrative_json = json.dumps({"insight": "The recorded position led today's gains."})
         with patch("app.today._daily_summary_context", new=AsyncMock(return_value=context)), \
                 patch("app.today._deepseek_json", new=AsyncMock(return_value=narrative_json)) as narrator, \
                 patch("app.today._save_daily_review_part") as save:
@@ -471,7 +467,7 @@ class SeparateDailyGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(save.call_args.args[1], "summary")
         narrator.assert_awaited_once()
         self.assertEqual(result["summary_source"], "ai")
-        self.assertEqual(result["summary_brief"]["narrative"]["portfolio_narrative"], "京东方A为当日主要正贡献标的。")
+        self.assertEqual(result["summary_brief"]["narrative"]["insight"], "The recorded position led today's gains.")
         self.assertEqual(result["summary_brief"]["portfolio"]["status"], "estimated")
         self.assertIsNone(result["summary_brief"]["portfolio"]["daily_return_pct"])
         self.assertEqual(result["summary_facts"]["portfolio_status"], "complete")

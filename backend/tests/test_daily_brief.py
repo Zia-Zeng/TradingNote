@@ -19,11 +19,10 @@ class DailyBriefTests(unittest.TestCase):
                 {"name": "Materials", "date": "2026-10-20", "status": "complete", "change_pct": -0.4},
             ],
         })
-        self.assertIn("上证指数+0.12%", brief["market"]["text"])
-        self.assertIn("创业板指-0.26%", brief["market"]["text"])
-        self.assertEqual([item["name"] for item in brief["market"]["leaders"]], ["工业", "信息技术"])
-        self.assertEqual([item["name"] for item in brief["market"]["laggards"]], ["能源", "原材料"])
-        self.assertNotIn("偏强", brief["market"]["text"])
+        self.assertIn("Shanghai Composite +0.12%", brief["market"]["text"])
+        self.assertIn("ChiNext -0.26%", brief["market"]["text"])
+        self.assertEqual([item["name"] for item in brief["market"]["leaders"]], ["Industrials", "Information Technology"])
+        self.assertEqual([item["name"] for item in brief["market"]["laggards"]], ["Energy", "Materials"])
 
     def test_imported_industry_context_is_kept_for_ai_but_hidden_from_market_fact_line(self):
         brief = build_daily_brief({
@@ -31,7 +30,7 @@ class DailyBriefTests(unittest.TestCase):
             "market_benchmarks": [{"name": "Shanghai Composite", "date": "2026-10-20", "status": "complete", "change_pct": 0.12}],
             "industry_performance": [{"name": "Information Technology", "date": "2026-10-20", "status": "complete", "change_pct": 1.75, "related_holdings": ["京东方A"]}],
         })
-        self.assertEqual(brief["market"]["text"], "上证指数+0.12%。")
+        self.assertEqual(brief["market"]["text"], "Shanghai Composite +0.12%.")
         self.assertEqual(brief["market"]["sectors"][0]["related_holdings"], ["京东方A"])
 
     def test_imported_positions_are_calculated_without_whole_account_snapshot(self):
@@ -45,9 +44,9 @@ class DailyBriefTests(unittest.TestCase):
                 "complete": True,
             },
         })
-        self.assertEqual(brief["market"]["text"], "沪深300+2.39%。")
-        self.assertEqual(brief["portfolio"]["status"], "calculated")
-        self.assertEqual(brief["portfolio"]["scope"], "imported_portfolio")
+        self.assertEqual(brief["market"]["text"], "CSI 300 +2.39%.")
+        self.assertEqual(brief["portfolio"]["status"], "estimated")
+        self.assertEqual(brief["portfolio"]["scope"], "recorded_securities")
         self.assertIsNone(brief["portfolio"]["daily_return_pct"])
         self.assertEqual(brief["winners"][0]["name"], "东方睿力")
         self.assertNotIn("账户实际", brief["market"]["text"])
@@ -58,7 +57,7 @@ class DailyBriefTests(unittest.TestCase):
             "market_benchmarks": [{"name": "CSI 300", "date": "2026-06-19", "status": "complete", "change_pct": 2.39}],
             "industry_performance": [{"name": "Materials", "date": "2026-06-22", "status": "unavailable", "change_pct": None, "related_holdings": ["A"]}],
         })
-        self.assertEqual(brief["market"]["text"], "市场数据暂不可用。")
+        self.assertEqual(brief["market"]["text"], "Market data is currently unavailable.")
         self.assertEqual(brief["portfolio"]["status"], "unavailable")
         self.assertEqual(brief["winners"], [])
 
@@ -69,7 +68,7 @@ class DailyBriefTests(unittest.TestCase):
             "portfolio_result": {"pnl_by_currency": {"CNY": 100}, "attribution": [{"symbol": "A", "currency": "CNY", "pnl": 20}]},
         })
         self.assertEqual(brief["winners"], [])
-        self.assertTrue(any("未对齐" in warning for warning in brief["caveats"]))
+        self.assertTrue(any("do not reconcile" in warning for warning in brief["caveats"]))
 
     def test_conflicted_snapshot_suppresses_amounts(self):
         brief = build_daily_brief({

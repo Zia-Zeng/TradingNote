@@ -194,6 +194,8 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
             "status": portfolio_status, "scope": "recorded_securities",
             "amounts": amounts, "daily_return_pct": None, "text": portfolio_text,
         },
-        "winners": winners[:3], "losers": losers[:3], "contributions_by_market": contributions_by_market,
+        "winners": winners[:3] if len(amounts) <= 1 else [],
+        "losers": losers[:3] if len(amounts) <= 1 else [],
+        "contributions_by_market": contributions_by_market,
         "caveats": warnings[:3],
     }
