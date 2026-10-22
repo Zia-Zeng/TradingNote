@@ -1,9 +1,9 @@
 {
   "id": "./",
-  "name": "M-TradingNote 交易复盘",
+  "name": "M-TradingNote Trading Journal",
   "short_name": "M-TradingNote",
-  "description": "面向个人投资者的交易记录与复盘助手。",
-  "lang": "zh-CN",
+  "description": "A trading journal and review assistant for individual investors.",
+  "lang": "en",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

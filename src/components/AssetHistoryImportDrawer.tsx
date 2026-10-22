@@ -89,7 +89,7 @@ export default function AssetHistoryImportDrawer({ open, onClose }: { open: bool
           <div>
             <div className="flex items-center gap-2 rounded-lg border border-slate-200 px-2.5 py-2 focus-within:border-[#EE6C4D]">
               <Search size={14} className="shrink-0 text-slate-400" />
-              <input value={query} onFocus={() => setSearchOpen(true)} onChange={event => { setQuery(event.target.value); setSearchOpen(true); }} onKeyDown={event => { if (event.key === 'Enter') useTypedInstrument(); if (event.key === 'Escape') setSearchOpen(false); }} placeholder="Search name or ticker, e.g. 紫金黄金国际" autoComplete="off" className="min-w-0 flex-1 bg-transparent text-[13px] font-semibold text-[#0B2545] outline-none placeholder:font-normal placeholder:text-slate-300" />
+              <input value={query} onFocus={() => setSearchOpen(true)} onChange={event => { setQuery(event.target.value); setSearchOpen(true); }} onKeyDown={event => { if (event.key === 'Enter') useTypedInstrument(); if (event.key === 'Escape') setSearchOpen(false); }} placeholder="Search name or ticker, e.g. Coca-Cola" autoComplete="off" className="min-w-0 flex-1 bg-transparent text-[13px] font-semibold text-[#0B2545] outline-none placeholder:font-normal placeholder:text-slate-300" />
             </div>
             {searchOpen && query.trim() && <div className="mt-1 max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-sm">
               {options.map(option => <button key={`${option.market}:${option.code}`} type="button" onMouseDown={event => event.preventDefault()} onClick={() => {

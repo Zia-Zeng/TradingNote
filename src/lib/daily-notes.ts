@@ -22,7 +22,7 @@ export function useDailyNotes(tradeDate?: string) {
       setNotes(await apiRequest<DailyNote[]>(`/api/today/notes${query}`));
       setError('');
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '笔记加载失败');
+      setError(reason instanceof Error ? reason.message : 'Unable to load notes.');
     } finally {
       setLoading(false);
     }
@@ -41,7 +41,7 @@ export function useDailyNotes(tradeDate?: string) {
       notifyDailyReviewInputsChanged(note.trade_date, 'note');
       return note;
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '笔记保存失败');
+      setError(reason instanceof Error ? reason.message : 'Unable to save note.');
       throw reason;
     }
   }, [tradeDate]);
@@ -57,7 +57,7 @@ export function useDailyNotes(tradeDate?: string) {
       notifyDailyReviewInputsChanged(note.trade_date, 'note');
       return note;
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '笔记更新失败');
+      setError(reason instanceof Error ? reason.message : 'Unable to update note.');
       throw reason;
     }
   }, [tradeDate]);
@@ -70,7 +70,7 @@ export function useDailyNotes(tradeDate?: string) {
       setError('');
       notifyDailyReviewInputsChanged(removedNote?.trade_date ?? tradeDate ?? localDate(), 'note');
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '笔记删除失败');
+      setError(reason instanceof Error ? reason.message : 'Unable to delete note.');
       throw reason;
     }
   }, [notes, tradeDate]);

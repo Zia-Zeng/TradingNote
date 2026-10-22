@@ -10,7 +10,7 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   try {
     response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers });
   } catch {
-    throw new Error(`Cannot connect to the backend at ${API_BASE_URL}. Please make sure it is running.`);
+    throw new Error(`Could not reach the API at ${API_BASE_URL}. The server may be offline, or it may not allow requests from ${window.location.origin}.`);
   }
 
   if (response.status === 204) return undefined as T;

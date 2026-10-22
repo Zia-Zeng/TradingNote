@@ -12,21 +12,30 @@ from typing import Any
 
 
 INDEX_NAMES = {
-    "Shanghai Composite": "上证指数",
-    "Shenzhen Component": "深证成指",
-    "ChiNext": "创业板指",
-    "CSI 300": "沪深300",
-    "Hang Seng Index": "恒生指数",
-    "S&P 500": "标普500",
-    "Bitcoin": "比特币",
+    "Shanghai Composite": "Shanghai Composite",
+    "Shenzhen Component": "Shenzhen Component",
+    "ChiNext": "ChiNext",
+    "CSI 300": "CSI 300",
+    "Hang Seng Index": "Hang Seng Index",
+    "S&P 500": "S&P 500",
+    "Bitcoin": "Bitcoin",
+    "上证指数": "Shanghai Composite", "上证综指": "Shanghai Composite",
+    "深证成指": "Shenzhen Component", "创业板指": "ChiNext",
+    "沪深300": "CSI 300", "恒生指数": "Hang Seng Index",
+    "标普500": "S&P 500", "比特币": "Bitcoin",
 }
-COMMODITY_NAMES = {"Gold futures": "黄金期货"}
+COMMODITY_NAMES = {"Gold futures": "Gold futures", "黄金期货": "Gold futures", "黄金现货": "Gold spot"}
 SECTOR_NAMES = {
-    "Energy": "能源", "Materials": "原材料", "Industrials": "工业",
-    "Consumer Discretionary": "可选消费", "Consumer Staples": "必需消费",
-    "Health Care": "医疗保健", "Financials": "金融", "Real Estate": "房地产",
-    "Information Technology": "信息技术", "Communication Services": "通信服务",
-    "Utilities": "公用事业",
+    "Energy": "Energy", "Materials": "Materials", "Industrials": "Industrials",
+    "Consumer Discretionary": "Consumer Discretionary", "Consumer Staples": "Consumer Staples",
+    "Health Care": "Health Care", "Financials": "Financials", "Real Estate": "Real Estate",
+    "Information Technology": "Information Technology", "Communication Services": "Communication Services",
+    "Utilities": "Utilities",
+    "能源": "Energy", "原材料": "Materials", "工业": "Industrials",
+    "可选消费": "Consumer Discretionary", "必需消费": "Consumer Staples",
+    "医疗保健": "Health Care", "金融": "Financials", "房地产": "Real Estate",
+    "信息技术": "Information Technology", "通信服务": "Communication Services",
+    "公用事业": "Utilities",
 }
 
 
@@ -53,7 +62,7 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
         if row.get("status") != "complete" or row.get("date", review_date) != review_date or change is None:
             continue
         indices.append({
-            "name": INDEX_NAMES.get(str(row.get("name")), str(row.get("name") or "指数")),
+            "name": INDEX_NAMES.get(str(row.get("name")), str(row.get("name") or "Index")),
             "change_pct": round(change, 2), "date": review_date,
             "source": row.get("source"),
         })
@@ -66,7 +75,7 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
         if row.get("status") != "complete" or row.get("date", review_date) != review_date or change is None or not holdings:
             continue
         sectors.append({
-            "name": SECTOR_NAMES.get(str(row.get("name")), str(row.get("name") or "行业")),
+            "name": SECTOR_NAMES.get(str(row.get("name")), str(row.get("name") or "Sector")),
             "change_pct": round(change, 2), "related_holdings": holdings[:3],
             "date": review_date, "source": row.get("source"),
         })
@@ -79,10 +88,10 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
         if row.get("status") != "complete" or row.get("date", review_date) != review_date or change is None or close is None:
             continue
         commodities.append({
-            "name": COMMODITY_NAMES.get(str(row.get("name")), str(row.get("name") or "大宗商品")),
+            "name": COMMODITY_NAMES.get(str(row.get("name")), str(row.get("name") or "Commodity")),
             "code": row.get("code"), "close": round(close, 2),
             "change_pct": round(change, 2), "date": review_date,
-            "currency": "USD", "unit": "盎司",
+            "currency": "USD", "unit": "oz",
             "source": row.get("source"),
         })
     market_sectors = []
@@ -91,7 +100,7 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
         if row.get("status") != "complete" or row.get("date", review_date) != review_date or change is None:
             continue
         market_sectors.append({
-            "name": SECTOR_NAMES.get(str(row.get("name")), str(row.get("name") or "行业")),
+            "name": SECTOR_NAMES.get(str(row.get("name")), str(row.get("name") or "Sector")),
             "change_pct": round(change, 2),
         })
     leaders = sorted(market_sectors, key=lambda item: item["change_pct"], reverse=True)[:2]
@@ -102,12 +111,12 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
 
     warnings = []
     if not indices:
-        warnings.append("该日期缺少可核实的指数行情。")
-    market_text = "、".join(f"{item['name']}{_signed_percent(item['change_pct'])}" for item in indices)
+        warnings.append("Verified index data is unavailable for this date.")
+    market_text = ", ".join(f"{item['name']} {_signed_percent(item['change_pct'])}" for item in indices)
     if market_text:
-        market_text += "。"
+        market_text += "."
     if not market_text:
-        market_text = "市场数据暂不可用。"
+        market_text = "Market data is currently unavailable."
     if commodities and not indices:
         market_text = ""
 
@@ -121,13 +130,13 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
                 amounts.append({"currency": currency, "amount": round(amount, 2)})
     portfolio_status = "estimated" if amounts else "unavailable"
     portfolio_text = (
-        "根据已记录持仓和成交估算证券当日损益；尚未核实为账户实际盈亏。"
-        if amounts else "账户当日盈亏暂不可核实。"
+        "Estimated daily P&L for recorded securities; this has not been reconciled against the full account balance."
+        if amounts else "Daily portfolio P&L could not be verified."
     )
     if amounts:
-        warnings.append("缺少完整资金流水、费用及汇率核对；所列金额仅为已记录证券的估算。")
+        warnings.append("Cash flows, fees, and FX have not been fully reconciled; figures are estimates for recorded securities only.")
     else:
-        warnings.append("缺少可完整核算的持仓和交易数据，暂不显示盈亏及归因。")
+        warnings.append("Complete holdings and trade data are unavailable, so P&L and attribution are not shown.")
 
     winners: list[dict[str, Any]] = []
     losers: list[dict[str, Any]] = []
@@ -141,13 +150,13 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
                 value = _number(item.get("pnl"))
                 if item.get("currency") == currency and value is not None:
                     rows.append({
-                        "name": str(item.get("symbol") or item.get("code") or "未知证券"),
+                        "name": str(item.get("symbol") or item.get("code") or "Unknown security"),
                         "code": item.get("code"), "currency": currency,
                         "amount": round(value, 2), "status": "estimated",
                     })
             reported = next(row["amount"] for row in amounts if row["currency"] == currency)
             if abs(sum(row["amount"] for row in rows) - reported) > max(0.05, abs(reported) * 0.0001):
-                warnings.append(f"{currency} 的证券贡献与估算总额未对齐，已隐藏该币种归因。")
+                warnings.append(f"{currency} security contributions do not reconcile with the estimated total; attribution for this currency is hidden.")
                 continue
             winners.extend(sorted((row for row in rows if row["amount"] > 0), key=lambda row: -row["amount"])[:3])
             losers.extend(sorted((row for row in rows if row["amount"] < 0), key=lambda row: row["amount"])[:3])
@@ -163,14 +172,14 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
                     if item.get("currency") != currency or str(item.get("market") or "OTHER").upper() != market or value is None:
                         continue
                     market_rows.append({
-                        "name": str(item.get("symbol") or item.get("code") or "未知证券"),
+                        "name": str(item.get("symbol") or item.get("code") or "Unknown security"),
                         "code": item.get("code"), "currency": currency,
                         "amount": round(value, 2), "status": "estimated", "market": market,
                     })
                 market_winners = sorted((row for row in market_rows if row["amount"] > 0), key=lambda row: -row["amount"])[:3]
                 market_losers = sorted((row for row in market_rows if row["amount"] < 0), key=lambda row: row["amount"])[:3]
                 if market_winners or market_losers:
-                    market_names = {"CN": "A股", "HK": "港股", "US": "美股", "CRYPTO": "加密资产"}
+                    market_names = {"CN": "A-shares", "HK": "Hong Kong stocks", "US": "U.S. stocks", "CRYPTO": "Crypto"}
                     contributions_by_market.append({
                         "market": market, "market_name": market_names.get(market, market),
                         "currency": currency, "winners": market_winners, "losers": market_losers,

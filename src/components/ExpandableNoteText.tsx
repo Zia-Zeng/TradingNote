@@ -21,7 +21,7 @@ export default function ExpandableNoteText({ text, className = '' }: { text: str
           className="mt-1 text-[10px] font-bold text-[#EE6C4D]"
           aria-expanded={expanded}
         >
-          {expanded ? '收起' : '展开'}
+          {expanded ? 'Show less' : 'Show more'}
         </button>
       )}
     </div>

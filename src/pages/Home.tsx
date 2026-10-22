@@ -9,7 +9,7 @@ import TradesModule from '../components/TradesModule';
 import { formatNoteDate, localDate, useDailyNotes } from '../lib/daily-notes';
 import ExpandableNoteText from '../components/ExpandableNoteText';
 import HoldingsSnapshotModule from '../components/HoldingsSnapshotModule';
-import { DAILY_REVIEW_INPUTS_CHANGED, generateDailySummary, generateTradeReviews, getDailyReview, type DailyReview } from '../lib/daily-review';
+import { DAILY_REVIEW_INPUTS_CHANGED, dailyMarketText, dailyPortfolioAmounts, englishMarketLabel, generateDailySummary, generateTradeReviews, getDailyReview, type DailyReview } from '../lib/daily-review';
 import { getDailyPnl, PORTFOLIO_SNAPSHOT_CHANGED, type DailyPnlResult, type PortfolioSnapshotChangedDetail } from '../lib/daily-pnl';
 
 const formatPnl = (value: number, currency: string, compact = false) => {
@@ -32,6 +32,13 @@ type MarketContributionGroup = {
   losers: Array<{ name: string; code?: string | null; amount: number }>;
 };
 
+const LEGACY_CHINESE_EMPTY_REVIEW = '\u5f53\u5929\u6ca1\u6709\u6210\u4ea4\uff0c\u4e5f\u6ca1\u6709\u76f8\u5173\u7b14\u8bb0\u53ef\u4f9b\u5224\u65ad\uff1b\u56e0\u6b64\u6ca1\u6709\u5177\u4f53\u4ea4\u6613\u52a8\u4f5c\u9700\u8981\u590d\u76d8\uff0c\u4e5f\u4e0d\u636e\u6b64\u8bc4\u4ef7\u89c2\u671b\u51b3\u7b56\u7684\u597d\u574f\u3002';
+const EMPTY_REVIEW_ENGLISH = 'No trades or related notes were recorded for this date, so there are no specific trading decisions to review. This is not an assessment of whether staying on the sidelines was right or wrong.';
+
+function displayTradeReviewOverview(value: string | null | undefined): string | null | undefined {
+  return value?.trim() === LEGACY_CHINESE_EMPTY_REVIEW ? EMPTY_REVIEW_ENGLISH : value;
+}
+
 function getMarketContributions(review: DailyReview): MarketContributionGroup[] {
   const fromBrief = review.summary_brief?.contributions_by_market;
   if (fromBrief?.length) return fromBrief;
@@ -40,8 +47,8 @@ function getMarketContributions(review: DailyReview): MarketContributionGroup[] 
   // did not expose market groups. Recover those rows so mixed-currency days
   // still show the instruments instead of silently dropping all attribution.
   const attribution = review.summary_facts?.portfolio_result?.attribution || [];
-  const amounts = review.summary_brief?.portfolio.amounts || [];
-  const marketNames: Record<string, string> = { CN: 'A股', HK: '港股', US: '美股', CRYPTO: '加密资产' };
+  const amounts = dailyPortfolioAmounts(review);
+  const marketNames: Record<string, string> = { CN: 'A-shares', HK: 'Hong Kong stocks', US: 'U.S. stocks', CRYPTO: 'Crypto' };
   const groups: MarketContributionGroup[] = [];
   for (const total of amounts) {
     const currencyRows = attribution.filter(row => row.currency === total.currency && Number.isFinite(row.pnl));
@@ -52,7 +59,7 @@ function getMarketContributions(review: DailyReview): MarketContributionGroup[] 
     const marketKeys = [...new Set(currencyRows.map(row => (row.market || 'OTHER').toUpperCase()))];
     for (const market of marketKeys) {
       const rows = currencyRows.filter(row => (row.market || 'OTHER').toUpperCase() === market).map(row => ({
-        name: row.symbol || row.code || '未知证券', code: row.code,
+        name: row.symbol || row.code || 'Unknown security', code: row.code,
         amount: Math.round(row.pnl * 100) / 100,
       }));
       const winners = rows.filter(row => row.amount > 0).sort((a, b) => b.amount - a.amount).slice(0, 3);
@@ -135,7 +142,7 @@ export default function Home() {
   });
 
   const openDailyAgent = () => {
-    const prompt = `请结合 ${selectedDate} 的交易笔记、当日日记、标的笔记和历史关联记录，陪我做一次本日复盘。综合交易理由、笔记里的后续安排与实际执行，判断哪些决策合理、哪些值得商榷，以及有哪些结论值得继续验证。请引用具体记录；没有证据的地方明确说明，不要给买卖建议。`;
+    const prompt = `Please review my trading activity for ${selectedDate} using my trade notes, daily journal, asset notes, and relevant history. Consider my rationale, any plans recorded in my notes, and what I actually did. Identify decisions that were sound, those worth reconsidering, and conclusions to validate later. Cite specific records, state when evidence is unavailable, and do not give buy or sell recommendations.`;
     navigate(`/agent?ref=daily-${selectedDate}&prompt=${encodeURIComponent(prompt)}`);
   };
 
@@ -213,7 +220,7 @@ export default function Home() {
   };
 
   const tradeReviewEvidence = new Map((dailyReview?.trade_review_evidence || []).map(item => [item.ref_id, item]));
-  const formatBriefAmount = (amount: number, currency: string) => `${amount > 0 ? '+' : ''}${currency} ${amount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const formatBriefAmount = (amount: number, currency: string) => `${amount > 0 ? '+' : ''}${currency} ${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   useEffect(() => {
     if (onboardParam === '1') setOnboardingStep(1);
@@ -421,9 +428,9 @@ export default function Home() {
                     ? (isSelected ? 'text-rose-200' : 'text-rose-600')
                     : (isSelected ? 'text-white/70' : 'text-slate-400');
                 const totalPnlBase = dayPnl?.total_pnl_base;
-                const pnlCellTone = dayPnl?.complete && dayPnl.fx_conversion_complete && totalPnlBase != null && totalPnlBase > 0
+                const pnlCellTone = dayPnl?.fx_conversion_complete && totalPnlBase != null && totalPnlBase > 0
                   ? isSelected ? '!bg-emerald-600 !text-white' : 'bg-emerald-100 text-emerald-800'
-                  : dayPnl?.complete && dayPnl.fx_conversion_complete && totalPnlBase != null && totalPnlBase < 0
+                  : dayPnl?.fx_conversion_complete && totalPnlBase != null && totalPnlBase < 0
                     ? isSelected ? '!bg-rose-600 !text-white' : 'bg-rose-100 text-rose-700'
                     : isSelected ? '!bg-[#0B2545] !text-white' : 'bg-slate-50 text-slate-500';
                 return (
@@ -438,11 +445,9 @@ export default function Home() {
                     )}
                   >
                     <span className="text-[11px] font-bold">{day}</span>
-                    {pnlLabel && <span title={dayPnl?.complete
-                      ? `${pnlEntries.map(([currency, value]) => formatPnl(value, currency)).join(' · ')}${dayPnl.fx_conversion_complete && totalPnlBase != null ? ` · Total ${formatPnl(totalPnlBase, dayPnl.pnl_base_currency || 'CNY')}` : ' · FX conversion unavailable'}`
-                      : dayPnl?.reason === 'snapshot_anchor'
-                        ? 'Snapshot date: same-day P&L cannot be derived from an end-of-day snapshot.'
-                        : `${dayPnl?.snapshot_mismatch ? 'Partial P&L; trade ledger does not reconcile with snapshot' : 'Partial P&L; missing close'}: ${(dayPnl?.missing_instruments || []).map(item => `${item.symbol} (${item.code})`).join(', ') || 'price history incomplete'}`}
+                    {pnlLabel && <span title={dayPnl
+                      ? `${pnlEntries.map(([currency, value]) => formatPnl(value, currency)).join(' · ')}${dayPnl.fx_conversion_complete && totalPnlBase != null ? ` · Total ${formatPnl(totalPnlBase, dayPnl.pnl_base_currency || 'CNY')}` : ' · FX conversion unavailable'}${!dayPnl.complete ? ` · Partial data: ${(dayPnl.missing_instruments || []).map(item => `${item.symbol} (${item.code})`).join(', ') || (dayPnl.reason === 'snapshot_anchor' ? 'same-day P&L cannot be derived from an end-of-day snapshot' : 'price history incomplete')}` : ''}`
+                      : pnlValue}
                       className={cn("max-w-full text-[7px] leading-[8px] font-semibold font-mono", pnlEntries.length > 1 && "flex flex-col gap-px")}>{pnlEntries.length > 1
                         ? pnlLines.map((line, lineIndex) => {
                           const value = pnlEntries[lineIndex][1];
@@ -464,7 +469,7 @@ export default function Home() {
             
             <div className="flex items-center justify-between gap-2 mb-1.5 relative z-10">
               <h2 className="text-[14px] font-bold text-[#0B2545] tracking-tight flex items-center gap-1.5">
-                <Sparkles size={14} className="text-[#EE6C4D]" /> 市场与组合日评
+                <Sparkles size={14} className="text-[#EE6C4D]" /> Daily Summary
               </h2>
               <button
                 onClick={() => void handleGenerateSummary()}
@@ -472,56 +477,56 @@ export default function Home() {
                 className="bg-[#0B2545] hover:bg-[#134074] active:scale-95 text-white px-2.5 py-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1.5 transition-all shadow-sm disabled:opacity-60"
               >
                 {summaryGenerating ? <RefreshCw size={11} className="animate-spin" /> : dailyReview?.summary ? <RefreshCw size={11} /> : <Sparkles size={11} />}
-                {summaryGenerating ? '生成中…' : dailyReview?.summary_brief ? '重新生成' : '生成日评'}
+                {summaryGenerating ? 'Generating…' : dailyReview?.summary_brief ? 'Regenerate' : 'Generate review'}
               </button>
             </div>
             
             <div className="bg-[#0B2545]/[0.03] p-2 rounded-lg border border-[#0B2545]/10 relative z-10">
               <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">{selectedDateLabel}</div>
-              {reviewLoading ? <p className="text-[11px] text-slate-400">正在加载日评…</p> : dailyReview?.summary_brief ? (
+              {reviewLoading ? <p className="text-[11px] text-slate-400">Loading review…</p> : dailyReview?.summary_brief ? (
                 <>
                   <div className="space-y-2.5">
                     <section>
-                      <h3 className="mb-0.5 text-[11px] font-bold text-[#0B2545]">市场表现</h3>
-                      {dailyReview.summary_brief.market.text && <p className="text-[11px] leading-relaxed text-[#134074]">{dailyReview.summary_brief.market.text}</p>}
+                      <h3 className="mb-0.5 text-[11px] font-bold text-[#0B2545]">Market Performance</h3>
+                      {dailyReview.summary_brief.market.text && <p className="text-[11px] leading-relaxed text-[#134074]">{dailyMarketText(dailyReview.summary_brief, dailyReview.summary_facts)}</p>}
                       {dailyReview.summary_brief.market.sectors.length > 0 && (
                         <div className="mt-1 space-y-0.5 text-[11px] leading-relaxed text-slate-600">
-                          <p className="font-semibold">持仓关联行业</p>
+                          <p className="font-semibold">Sectors Linked to Holdings</p>
                           {dailyReview.summary_brief.market.sectors.map(sector => (
                             <p key={`${sector.name}-${sector.date}`}>
-                              {sector.name} {sector.change_pct > 0 ? '+' : ''}{sector.change_pct.toFixed(2)}%
+                              {englishMarketLabel(sector.name)} {sector.change_pct > 0 ? '+' : ''}{sector.change_pct.toFixed(2)}%
                             </p>
                           ))}
                         </div>
                       )}
                       {((dailyReview.summary_brief.market.leaders?.length ?? 0) > 0 || (dailyReview.summary_brief.market.laggards?.length ?? 0) > 0) && (
                         <div className="mt-1 space-y-0.5 text-[11px] leading-relaxed text-slate-600">
-                          {!!dailyReview.summary_brief.market.leaders?.length && <p>板块偏强：{dailyReview.summary_brief.market.leaders.map(item => `${item.name} ${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`).join('、')}</p>}
-                          {!!dailyReview.summary_brief.market.laggards?.length && <p>板块偏弱：{dailyReview.summary_brief.market.laggards.map(item => `${item.name} ${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`).join('、')}</p>}
+                          {!!dailyReview.summary_brief.market.leaders?.length && <p>Leading sectors: {dailyReview.summary_brief.market.leaders.map(item => `${englishMarketLabel(item.name)} ${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`).join(', ')}</p>}
+                          {!!dailyReview.summary_brief.market.laggards?.length && <p>Lagging sectors: {dailyReview.summary_brief.market.laggards.map(item => `${englishMarketLabel(item.name)} ${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`).join(', ')}</p>}
                         </div>
                       )}
                       {dailyReview.summary_brief.market.breadth?.status === 'complete' && (
                         <p className="mt-1 text-[11px] leading-relaxed text-slate-600">
-                          A股前一交易日（{dailyReview.summary_brief.market.breadth.date}）：上涨 {dailyReview.summary_brief.market.breadth.up} 只、下跌 {dailyReview.summary_brief.market.breadth.down} 只{dailyReview.summary_brief.market.breadth.flat != null ? `、平盘 ${dailyReview.summary_brief.market.breadth.flat} 只` : ''}
-                          {dailyReview.summary_brief.market.breadth.url && <> · <a href={dailyReview.summary_brief.market.breadth.url} target="_blank" rel="noreferrer" className="text-[#134074] underline">{dailyReview.summary_brief.market.breadth.source || '来源'}</a></>}
+                          A-share breadth on {dailyReview.summary_brief.market.breadth.date}: {dailyReview.summary_brief.market.breadth.up} advancers, {dailyReview.summary_brief.market.breadth.down} decliners{dailyReview.summary_brief.market.breadth.flat != null ? `, ${dailyReview.summary_brief.market.breadth.flat} unchanged` : ''}
+                          {dailyReview.summary_brief.market.breadth.url && <> · <a href={dailyReview.summary_brief.market.breadth.url} target="_blank" rel="noreferrer" className="text-[#134074] underline">{dailyReview.summary_brief.market.breadth.source || 'Source'}</a></>}
                         </p>
                       )}
                       {dailyReview.summary_brief.market.commodities?.map(item => (
                         <p key={item.code} className="mt-1 text-[11px] leading-relaxed text-slate-600">
-                          {item.name} {item.currency}/{item.unit} {item.close.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({item.change_pct > 0 ? '+' : ''}{item.change_pct.toFixed(2)}%)
+                          {englishMarketLabel(item.name)} {item.currency}/{item.unit === '盎司' ? 'oz' : item.unit} {item.close.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({item.change_pct > 0 ? '+' : ''}{item.change_pct.toFixed(2)}%)
                         </p>
                       ))}
                     </section>
                     <section>
-                      <h3 className="mb-0.5 text-[11px] font-bold text-[#0B2545]">组合表现</h3>
-                      {dailyReview.summary_brief.portfolio.amounts.length > 0 && (
+                      <h3 className="mb-0.5 text-[11px] font-bold text-[#0B2545]">Portfolio Performance</h3>
+                      {dailyPortfolioAmounts(dailyReview).length > 0 && (
                         <p className="text-[13px] font-bold">
-                          {dailyReview.summary_brief.portfolio.amounts.map((item, index) => (
+                          {dailyPortfolioAmounts(dailyReview).map((item, index) => (
                             <React.Fragment key={item.currency}>
                               {index > 0 && <span className="text-[#0B2545]"> ｜ </span>}
                               <span className="text-[#0B2545]">{item.amount > 0 ? '+' : ''}{item.currency} </span>
                               <span className={item.amount > 0 ? 'text-emerald-700' : item.amount < 0 ? 'text-rose-700' : 'text-[#0B2545]'}>
-                                {item.amount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                {item.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </span>
                             </React.Fragment>
                           ))}
@@ -530,23 +535,23 @@ export default function Home() {
                     </section>
                     {(marketContributions.length > 0 || dailyReview.summary_brief.winners.length > 0 || dailyReview.summary_brief.losers.length > 0) && (
                       <section>
-                        <h3 className="mb-0.5 text-[11px] font-bold text-[#0B2545]">分市场标的盈亏贡献</h3>
+                        <h3 className="mb-0.5 text-[11px] font-bold text-[#0B2545]">P&L Contribution by Market</h3>
                         {marketContributions.length ? marketContributions.map(group => (
                           <div key={`${group.market}-${group.currency}`} className="text-[11px] leading-relaxed">
-                            <p className="font-semibold text-slate-700">{group.market_name}（{group.currency}）</p>
-                            {group.winners.length > 0 && <p className="text-emerald-700">正贡献：{group.winners.map(item => `${item.name} ${formatBriefAmount(item.amount, group.currency)}`).join('、')}</p>}
-                            {group.losers.length > 0 && <p className="text-rose-700">负贡献：{group.losers.map(item => `${item.name} ${formatBriefAmount(item.amount, group.currency)}`).join('、')}</p>}
+                            <p className="font-semibold text-slate-700">{englishMarketLabel(group.market_name, group.market)} ({group.currency})</p>
+                            {group.winners.length > 0 && <p className="text-emerald-700">Positive: {group.winners.map(item => `${item.name} ${formatBriefAmount(item.amount, group.currency)}`).join(', ')}</p>}
+                            {group.losers.length > 0 && <p className="text-rose-700">Negative: {group.losers.map(item => `${item.name} ${formatBriefAmount(item.amount, group.currency)}`).join(', ')}</p>}
                           </div>
                         )) : <>
-                          {dailyReview.summary_brief.winners.length > 0 && <p className="text-[11px] leading-relaxed text-emerald-700">正贡献：{dailyReview.summary_brief.winners.map(item => `${item.name} ${formatBriefAmount(item.amount, item.currency)}`).join('、')}</p>}
-                          {dailyReview.summary_brief.losers.length > 0 && <p className="text-[11px] leading-relaxed text-rose-700">负贡献：{dailyReview.summary_brief.losers.map(item => `${item.name} ${formatBriefAmount(item.amount, item.currency)}`).join('、')}</p>}
+                          {dailyReview.summary_brief.winners.length > 0 && <p className="text-[11px] leading-relaxed text-emerald-700">Positive: {dailyReview.summary_brief.winners.map(item => `${item.name} ${formatBriefAmount(item.amount, item.currency)}`).join(', ')}</p>}
+                          {dailyReview.summary_brief.losers.length > 0 && <p className="text-[11px] leading-relaxed text-rose-700">Negative: {dailyReview.summary_brief.losers.map(item => `${item.name} ${formatBriefAmount(item.amount, item.currency)}`).join(', ')}</p>}
                         </>}
                       </section>
                     )}
                   </div>
                   {dailyReview.summary_brief.narrative?.insight && <p className="mt-2 text-[11px] leading-relaxed text-[#134074]">{dailyReview.summary_brief.narrative.insight}</p>}
                 </>
-              ) : <p className="text-[11px] text-slate-400">{dailyReview?.summary ? '已有旧版摘要。请重新生成结构化日评。' : '生成该日的市场与持仓日评。'}</p>}
+              ) : <p className="text-[11px] text-slate-400">{dailyReview?.summary ? 'A previous summary is available. Regenerate to create a structured review.' : 'Generate a market and portfolio review for this date.'}</p>}
               {reviewError && <p role="alert" className="mt-1.5 text-[10px] text-rose-600">{reviewError}</p>}
             </div>
           </div>
@@ -630,7 +635,7 @@ export default function Home() {
               {dailyReview?.trade_review_overview && (dailyReview.trade_review_mode !== 'empty' || dailyReview.trade_reviews_generated_at) && (
                 <div className="mb-2.5 rounded-lg border border-[#0B2545]/10 bg-[#0B2545]/[0.03] p-2.5">
                   <div className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">Daily trade assessment</div>
-                  <p className="text-[11px] font-medium leading-relaxed text-[#134074]">{dailyReview.trade_review_overview}</p>
+                  <p className="text-[11px] font-medium leading-relaxed text-[#134074]">{displayTradeReviewOverview(dailyReview.trade_review_overview)}</p>
                 </div>
               )}
               {dailyReview?.trade_review_observations?.length ? <div className="mb-2.5 space-y-1 rounded-lg border border-slate-100 bg-slate-50 p-2.5">{dailyReview.trade_review_observations.map((item, index) => <p key={index} className="text-[11px] leading-relaxed text-slate-600">{item}</p>)}</div> : null}

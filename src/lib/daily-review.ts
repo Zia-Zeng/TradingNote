@@ -39,6 +39,7 @@ export type DailySummaryFacts = {
       change_pct: number | null;
     }>;
     complete?: boolean;
+    snapshot_mismatch?: boolean;
   } | null;
   portfolio_warnings: string[];
   market_benchmarks: Array<{
@@ -110,6 +111,50 @@ export type DailyReview = {
   trade_review_trace?: Record<string, unknown> | null;
   trade_reviews_generated_at: string | null;
 };
+
+const MARKET_LABELS: Record<string, string> = {
+  '上证指数': 'Shanghai Composite', '上证综指': 'Shanghai Composite',
+  '深证成指': 'Shenzhen Component', '创业板指': 'ChiNext', '沪深300': 'CSI 300',
+  '恒生指数': 'Hang Seng Index', '标普500': 'S&P 500', '比特币': 'Bitcoin',
+  '黄金期货': 'Gold futures', '黄金现货': 'Gold spot',
+  '能源': 'Energy', '原材料': 'Materials', '工业': 'Industrials',
+  '可选消费': 'Consumer Discretionary', '必需消费': 'Consumer Staples',
+  '医疗保健': 'Health Care', '金融': 'Financials', '房地产': 'Real Estate',
+  '信息技术': 'Information Technology', '通信服务': 'Communication Services', '公用事业': 'Utilities',
+  'A股': 'A-shares', '港股': 'Hong Kong stocks', '美股': 'U.S. stocks', '加密资产': 'Crypto',
+};
+
+export function englishMarketLabel(value: string, market?: string): string {
+  if (market) return ({ CN: 'A-shares', HK: 'Hong Kong stocks', US: 'U.S. stocks', CRYPTO: 'Crypto' } as Record<string, string>)[market.toUpperCase()] || value;
+  return MARKET_LABELS[value] || value;
+}
+
+export function dailyMarketText(brief: DailySummaryBrief, facts?: DailySummaryFacts | null): string {
+  const indices = [...(brief.market.indices || [])];
+  for (const item of facts?.market_benchmarks || []) {
+    if (item.status !== 'complete' || item.date !== brief.review_date || item.change_pct == null || !Number.isFinite(item.change_pct)) continue;
+    const name = englishMarketLabel(item.name);
+    if (!indices.some(existing => englishMarketLabel(existing.name) === name)) {
+      indices.push({ name, change_pct: item.change_pct, date: item.date, source: item.source });
+    }
+  }
+  if (indices.length) {
+    return `${indices.map(item => `${englishMarketLabel(item.name)} ${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`).join(', ')}.`;
+  }
+  let text = brief.market.text || '';
+  for (const [source, label] of Object.entries(MARKET_LABELS)) text = text.split(source).join(label);
+  return text.replace(/、/g, ', ').replace(/。$/, '.');
+}
+
+export function dailyPortfolioAmounts(review: DailyReview): Array<{ currency: string; amount: number }> {
+  const savedAmounts = review.summary_brief?.portfolio?.amounts || [];
+  if (savedAmounts.length) return savedAmounts;
+  const result = review.summary_facts?.portfolio_result;
+  if (!result || result.snapshot_mismatch || !result.pnl_by_currency) return [];
+  return Object.entries(result.pnl_by_currency)
+    .map(([currency, amount]) => ({ currency, amount }))
+    .filter(item => Number.isFinite(item.amount));
+}
 
 export const DAILY_REVIEW_INPUTS_CHANGED = 'tradingnote:daily-review-inputs-changed';
 

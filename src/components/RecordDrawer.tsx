@@ -331,8 +331,8 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onS
                     </div>
                     <textarea 
                       value={noteText} onChange={e => setNoteText(e.target.value)}
-                      placeholder={'为什么要这样交易？\n下一步准备怎么做呢？'}
-                      aria-label="交易笔记"
+                      placeholder={'What was your rationale for this trade?\nWhat will you do next?'}
+                      aria-label="Trade note"
                       maxLength={10000}
                       className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-[12px] min-h-[76px] focus:outline-none focus:border-[#EE6C4D] resize-y shadow-sm placeholder:text-slate-400 text-[#0B2545]"
                     />

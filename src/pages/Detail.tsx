@@ -126,11 +126,11 @@ const assetGroupKey = (trade: TradeRecord) => trade.code?.trim()
 
 const formatPrice = (value: number | null | undefined) => value === null || value === undefined || !Number.isFinite(value)
   ? '--'
-  : value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  : value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const formatMoney = (value: number | null) => value === null || !Number.isFinite(value)
   ? '--'
-  : `${value < 0 ? '- ' : ''}¥ ${Math.abs(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  : `${value < 0 ? '- ' : ''}¥ ${Math.abs(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const parseAmount = (value: unknown) => {
   if (typeof value === 'number') return value;
@@ -233,7 +233,7 @@ export default function Detail() {
     setTradeError(null);
     apiRequest<TradeRecord[]>('/api/trades')
       .then(records => { if (!cancelled) setTradeRecords(records); })
-      .catch(error => { if (!cancelled) setTradeError(error instanceof Error ? error.message : '交易记录加载失败。'); })
+      .catch(error => { if (!cancelled) setTradeError(error instanceof Error ? error.message : 'Unable to load trade history.'); })
       .finally(() => { if (!cancelled) setTradeLoading(false); });
     return () => { cancelled = true; };
   }, []);
@@ -338,7 +338,7 @@ export default function Detail() {
   const tradeTimeline = data.timeline;
   const timeline = useMemo<UserTimelineItem[]>(() => [
     ...tradeTimeline,
-    ...(notesForAssetKey === noteAssetKey ? assetNotes : []).map(note => ({ ...note, type: 'Note' as const, displayDate: new Date(note.created_at).toLocaleString('zh-CN', { hour12: false }) })),
+    ...(notesForAssetKey === noteAssetKey ? assetNotes : []).map(note => ({ ...note, type: 'Note' as const, displayDate: new Date(note.created_at).toLocaleString('en-US', { hour12: false }) })),
   ].sort((left, right) => {
     const timestamp = (item: UserTimelineItem) => item.type === 'Note'
       ? Date.parse(item.created_at)
@@ -362,7 +362,7 @@ export default function Detail() {
     const query = new URLSearchParams({ asset_key: noteAssetKey });
     apiRequest<AssetNote[]>(`/api/asset-notes?${query}`)
       .then(notes => { if (!cancelled) setAssetNotes(notes); })
-      .catch(error => { if (!cancelled) setNoteError(error instanceof Error ? error.message : '笔记加载失败。'); })
+      .catch(error => { if (!cancelled) setNoteError(error instanceof Error ? error.message : 'Unable to load notes.'); })
       .finally(() => { if (!cancelled) setNoteLoading(false); });
     return () => { cancelled = true; };
   }, [noteAssetKey, tradeLoading]);
@@ -388,7 +388,7 @@ export default function Detail() {
     const query = new URLSearchParams({ start_date: startDate, end_date: endDate });
     apiRequest<MarketHistory>(`/api/market/history/${encodeURIComponent(marketCode)}?${query.toString()}`)
       .then(result => { saveMarketCache(cacheKey, endDate, result); if (!cancelled) setMarketData(result); })
-      .catch(error => { if (!cancelled) setMarketError(error instanceof Error ? error.message : '日线行情加载失败。'); })
+      .catch(error => { if (!cancelled) setMarketError(error instanceof Error ? error.message : 'Unable to load daily market data.'); })
       .finally(() => { if (!cancelled) setMarketLoading(false); });
     return () => { cancelled = true; };
   }, [assetTrades.length, isHistoryPage, marketCode, startDate]);
@@ -453,7 +453,7 @@ export default function Detail() {
       setAssetNotes(current => [note, ...current]);
       setNewAssetNote('');
     } catch (error) {
-      if (noteAssetKeyRef.current === assetKey) setNoteError(error instanceof Error ? error.message : '笔记保存失败。');
+      if (noteAssetKeyRef.current === assetKey) setNoteError(error instanceof Error ? error.message : 'Unable to save note.');
     } finally {
       setNoteSaving(false);
     }
@@ -649,10 +649,10 @@ export default function Detail() {
       {(tradeError || marketError || (!tradeLoading && assetTrades.length === 0)) && (
         <div role="status" className="bg-white px-3 py-2 mb-1 text-[10px] text-amber-700">
           {tradeLoading ? 'Loading asset trades…' : tradeError
-            ? `交易记录加载失败：${tradeError}`
+            ? `Unable to load trade history: ${tradeError}`
             : assetTrades.length === 0
-              ? `后端暂时没有 ${data.code || data.symbol} 的交易记录。请先在 Today 保存该资产的交易。`
-              : `${marketData ? '日线行情更新失败，显示上次缓存数据' : '日线行情暂不可用'}：${marketError}`}
+              ? `No trade history is available for ${data.code || data.symbol}. Record a trade for this asset on Today first.`
+              : `${marketData ? 'Daily market data could not be refreshed; showing the last cached data' : 'Daily market data is unavailable'}: ${marketError}`}
         </div>
       )}
 
@@ -912,7 +912,7 @@ export default function Detail() {
           )}
           {aiTracking ? (
             <div className="text-right text-[8px] text-emerald-700 font-bold uppercase">
-              Generated by AI Tracking · {new Date(aiTracking.savedAt).toLocaleString()}
+              Generated by AI Tracking · {new Date(aiTracking.savedAt).toLocaleString('en-US')}
             </div>
           ) : savedAssetTracking ? (
             <div className="text-right text-[8px] text-emerald-700 font-bold uppercase">Updated from M-Agent</div>

@@ -1,6 +1,6 @@
 # M-TradingNote Demo
 
-M-TradingNote is an AI-powered trading review and discipline coaching product designed for individual investors. TradingNote 是一款面向个人投资者的 AI 交易复盘与纪律陪练产品
+M-TradingNote is an AI-powered trading journal and review assistant designed to help individual investors make more disciplined decisions.
 
 A mobile trading journal prototype built with React, TypeScript, Tailwind CSS, and Vite. The screens use sample data.
 

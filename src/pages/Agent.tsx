@@ -14,7 +14,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { readLocalResult, saveLocalResult } from '../lib/saved-results';
 import { apiRequest } from '../lib/api';
-import { generateDailySummary, generateTradeReviews, getDailyReview, type DailyReview } from '../lib/daily-review';
+import { dailyMarketText, dailyPortfolioAmounts, englishMarketLabel, generateDailySummary, generateTradeReviews, getDailyReview, type DailyReview } from '../lib/daily-review';
 
 type ConversationSummary = {
   conversation_id: string;
@@ -58,55 +58,56 @@ type BehaviorInsights = {
   holdings_as_of: string | null;
 };
 
-const TODAY_PRESET_QUESTION = '今天的交易怎么样呢？';
-const REVIEW_PRESET_QUESTION = '请帮我复盘在 JDF 这支股票上的交易';
-const REVIEW_ACTION_QUESTION = '请帮我复盘最近的交易';
-const INSIGHTS_PRESET_QUESTION = '帮我分析一下最近的交易风格';
+const TODAY_PRESET_QUESTION = 'How did my trading go today?';
+const REVIEW_PRESET_QUESTION = 'Review my trades in JDF';
+const REVIEW_ACTION_QUESTION = 'Review my recent trades';
+const INSIGHTS_PRESET_QUESTION = 'Analyze my recent trading patterns';
 const DRAFT_PRESET_QUESTION = 'Help me draft a solid investment plan based on my recent holdings.';
 const INSIGHTS_MESSAGE_PREFIX = 'BEHAVIOR_INSIGHTS_JSON:';
 
 function dailyReviewAnswer(review: DailyReview): string {
-  const sections = [`今日交易复盘（${review.trade_date}）`];
+  const sections = [`Daily Trading Review · ${review.trade_date}`];
   const brief = review.summary_brief;
   if (brief) {
-    sections.push('市场表现', brief.market.text);
-    if (brief.market.sectors.length) sections.push(...brief.market.sectors.map(item => `${item.name} ${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`));
-    if (brief.market.leaders?.length) sections.push(`板块偏强：${brief.market.leaders.map(item => `${item.name} ${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`).join('、')}`);
-    if (brief.market.laggards?.length) sections.push(`板块偏弱：${brief.market.laggards.map(item => `${item.name} ${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`).join('、')}`);
-    if (brief.market.breadth?.status === 'complete') sections.push(`A股前一交易日（${brief.market.breadth.date}）：上涨 ${brief.market.breadth.up} 只、下跌 ${brief.market.breadth.down} 只${brief.market.breadth.flat != null ? `、平盘 ${brief.market.breadth.flat} 只` : ''}${brief.market.breadth.url ? ` 来源：${brief.market.breadth.url}` : ''}`);
-    if (brief.market.commodities?.length) sections.push(...brief.market.commodities.map(item => `${item.name} ${item.currency}/${item.unit} ${item.close.toFixed(2)} (${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%)`));
-    sections.push('组合表现', brief.portfolio.amounts.length
-      ? brief.portfolio.amounts.map(item => `${item.currency} ${item.amount > 0 ? '+' : ''}${item.amount.toFixed(2)}`).join(' ｜ ')
-      : '当日组合盈亏暂无可核实数据。');
+    sections.push('Market Performance', dailyMarketText(brief, review.summary_facts));
+    if (brief.market.sectors.length) sections.push(...brief.market.sectors.map(item => `${englishMarketLabel(item.name)} ${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`));
+    if (brief.market.leaders?.length) sections.push(`Leading sectors: ${brief.market.leaders.map(item => `${englishMarketLabel(item.name)} ${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`).join(', ')}`);
+    if (brief.market.laggards?.length) sections.push(`Lagging sectors: ${brief.market.laggards.map(item => `${englishMarketLabel(item.name)} ${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`).join(', ')}`);
+    if (brief.market.breadth?.status === 'complete') sections.push(`A-share breadth on ${brief.market.breadth.date}: ${brief.market.breadth.up} advancers, ${brief.market.breadth.down} decliners${brief.market.breadth.flat != null ? `, ${brief.market.breadth.flat} unchanged` : ''}${brief.market.breadth.url ? ` Source: ${brief.market.breadth.url}` : ''}`);
+    if (brief.market.commodities?.length) sections.push(...brief.market.commodities.map(item => `${englishMarketLabel(item.name)} ${item.currency}/${item.unit === '盎司' ? 'oz' : item.unit} ${item.close.toFixed(2)} (${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%)`));
+    const portfolioAmounts = dailyPortfolioAmounts(review);
+    sections.push('Portfolio Performance', portfolioAmounts.length
+      ? portfolioAmounts.map(item => `${item.currency} ${item.amount > 0 ? '+' : ''}${item.amount.toFixed(2)}`).join(' | ')
+      : 'Verified portfolio P&L is unavailable for this date.');
     if (brief.narrative?.insight) sections.push(brief.narrative.insight);
     if (brief.contributions_by_market?.length) {
       for (const group of brief.contributions_by_market) {
-        if (group.winners.length) sections.push(`${group.market_name} 正贡献：${group.winners.map(row => `${row.name} ${group.currency} ${row.amount.toFixed(2)}`).join('、')}`);
-        if (group.losers.length) sections.push(`${group.market_name} 负贡献：${group.losers.map(row => `${row.name} ${group.currency} ${row.amount.toFixed(2)}`).join('、')}`);
+        if (group.winners.length) sections.push(`${englishMarketLabel(group.market_name, group.market)} positive contributors: ${group.winners.map(row => `${row.name} ${group.currency} ${row.amount.toFixed(2)}`).join(', ')}`);
+        if (group.losers.length) sections.push(`${englishMarketLabel(group.market_name, group.market)} negative contributors: ${group.losers.map(row => `${row.name} ${group.currency} ${row.amount.toFixed(2)}`).join(', ')}`);
       }
     } else {
-      if (brief.winners.length) sections.push(`正贡献：${brief.winners.map(row => `${row.name} ${row.currency} ${row.amount.toFixed(2)}`).join('、')}`);
-      if (brief.losers.length) sections.push(`负贡献：${brief.losers.map(row => `${row.name} ${row.currency} ${row.amount.toFixed(2)}`).join('、')}`);
+      if (brief.winners.length) sections.push(`Positive contributors: ${brief.winners.map(row => `${row.name} ${row.currency} ${row.amount.toFixed(2)}`).join(', ')}`);
+      if (brief.losers.length) sections.push(`Negative contributors: ${brief.losers.map(row => `${row.name} ${row.currency} ${row.amount.toFixed(2)}`).join(', ')}`);
     }
-    if (brief.caveats.length) sections.push(`说明：${brief.caveats.join('；')}`);
+    if (brief.caveats.length) sections.push(`Notes: ${brief.caveats.join('; ')}`);
   } else if (review.summary) {
-    sections.push('市场与组合日评', review.summary);
+    sections.push('Market & Portfolio Review', review.summary);
   } else {
-    sections.push('市场与组合日评尚无可用结果。');
+    sections.push('No market and portfolio review is available yet.');
   }
 
   sections.push('Trade Review');
   if (review.trade_review_stats) {
-    sections.push(`复盘记录：${review.trade_review_stats.trade_count} 笔交易；相关交易笔记 ${review.trade_review_stats.trade_note_count} 条；当日日记 ${review.trade_review_stats.daily_note_count} 条。`);
+    sections.push(`Review inputs: ${review.trade_review_stats.trade_count} trades, ${review.trade_review_stats.trade_note_count} trade notes, and ${review.trade_review_stats.daily_note_count} daily journal entries.`);
   }
   if (review.trade_review_overview) sections.push(review.trade_review_overview);
   if (review.trade_reviews?.length) {
-    sections.push(...review.trade_reviews.map(item => `${item.symbol}${item.title ? ` · ${item.title}` : ''}\n${item.review}${item.follow_up_question ? `\n待补充：${item.follow_up_question}` : ''}`));
+    sections.push(...review.trade_reviews.map(item => `${item.symbol}${item.title ? ` · ${item.title}` : ''}\n${item.review}${item.follow_up_question ? `\nFollow-up: ${item.follow_up_question}` : ''}`));
   }
   if (review.trade_review_observations.length) sections.push(...review.trade_review_observations);
-  if (review.trade_review_questions?.length) sections.push(`待确认问题：${review.trade_review_questions.slice(0, 2).join('；')}`);
+  if (review.trade_review_questions?.length) sections.push(`Questions: ${review.trade_review_questions.slice(0, 2).join('; ')}`);
   if (!review.trade_review_overview && !review.trade_reviews?.length && !review.trade_review_observations.length) {
-    sections.push(review.trade_count ? '当日 Trade Review 尚无可用结果。' : '今日没有成交记录。');
+    sections.push(review.trade_count ? 'No Trade Review is available for this date yet.' : 'No trades were recorded today.');
   }
   return sections.filter(Boolean).join('\n\n');
 }
@@ -156,7 +157,7 @@ function InsightsResult({ data }: { data: BehaviorInsights }) {
             <div className="min-w-0">
               <p className="text-[9px] font-semibold text-slate-500">Allocation</p>
               {pieData.length > 0 ? <>
-                <div className="h-24"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={pieData} dataKey="market_value" nameKey="symbol" cx="50%" cy="50%" innerRadius={17} outerRadius={40} stroke="#fff" strokeWidth={1}>{pieData.map((item, index) => <Cell key={item.code || item.symbol} fill={insightAllocationColor(index, pieData.length)} />)}</Pie><Tooltip formatter={(value: number) => `${chart.currency} ${value.toLocaleString()}`} /></PieChart></ResponsiveContainer></div>
+                <div className="h-24"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={pieData} dataKey="market_value" nameKey="symbol" cx="50%" cy="50%" innerRadius={17} outerRadius={40} stroke="#fff" strokeWidth={1}>{pieData.map((item, index) => <Cell key={item.code || item.symbol} fill={insightAllocationColor(index, pieData.length)} />)}</Pie><Tooltip formatter={(value: number) => `${chart.currency} ${value.toLocaleString('en-US')}`} /></PieChart></ResponsiveContainer></div>
                 <div className="space-y-1">{chart.allocation.map(item => {
                   const index = pieData.findIndex(value => value.code === item.code && value.symbol === item.symbol);
                   return <div key={item.code || item.symbol} className="flex items-start gap-1 text-[9px] text-slate-600"><span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: index >= 0 ? insightAllocationColor(index, pieData.length) : '#94a3b8' }} /><span className="min-w-0 flex-1 break-words">{item.symbol}</span><span className="font-mono shrink-0">{item.share_pct == null ? '—' : `${item.share_pct.toFixed(1)}%`}</span></div>;
@@ -167,8 +168,8 @@ function InsightsResult({ data }: { data: BehaviorInsights }) {
               <p className="text-[9px] font-semibold text-slate-500">Holding P/L</p>
               {returns.length > 0 ? <div className="mt-2 space-y-2.5">{returns.map(item => <div key={item.code || item.symbol} className="min-w-0">
                 <p className="truncate text-[9px] font-medium text-[#0B2545]" title={item.symbol}>{item.symbol}</p>
-                <div className="mt-1 h-2.5 w-full overflow-hidden rounded-r bg-slate-100" role="img" aria-label={`${item.symbol}: ${item.pnl! >= 0 ? 'gain' : 'loss'} ${chart.currency} ${Math.abs(item.pnl!).toLocaleString()}`}><div className="h-full rounded-r" style={{ width: maxAbsolutePnl > 0 ? `${Math.abs(item.pnl!) / maxAbsolutePnl * 100}%` : '0%', backgroundColor: insightColor(item.pnl) }} /></div>
-                <p className="mt-0.5 text-[9px] font-mono leading-tight" style={{ color: insightColor(item.pnl) }}>{item.pnl! >= 0 ? '+' : ''}{chart.currency} {item.pnl!.toLocaleString()}<br />{item.return_pct == null ? 'Return unavailable' : `${item.return_pct >= 0 ? '+' : ''}${item.return_pct.toFixed(1)}%`}</p>
+                <div className="mt-1 h-2.5 w-full overflow-hidden rounded-r bg-slate-100" role="img" aria-label={`${item.symbol}: ${item.pnl! >= 0 ? 'gain' : 'loss'} ${chart.currency} ${Math.abs(item.pnl!).toLocaleString('en-US')}`}><div className="h-full rounded-r" style={{ width: maxAbsolutePnl > 0 ? `${Math.abs(item.pnl!) / maxAbsolutePnl * 100}%` : '0%', backgroundColor: insightColor(item.pnl) }} /></div>
+                <p className="mt-0.5 text-[9px] font-mono leading-tight" style={{ color: insightColor(item.pnl) }}>{item.pnl! >= 0 ? '+' : ''}{chart.currency} {item.pnl!.toLocaleString('en-US')}<br />{item.return_pct == null ? 'Return unavailable' : `${item.return_pct >= 0 ? '+' : ''}${item.return_pct.toFixed(1)}%`}</p>
               </div>)}</div> : <p className="mt-2 text-[9px] text-slate-500">Average cost or market value is unavailable.</p>}
             </div>
           </div>
@@ -1105,8 +1106,8 @@ export default function Agent() {
           trade_context,
         }),
       }).catch(error => {
-        if (error instanceof Error && error.message.startsWith('无法连接后端')) {
-          throw new Error("无法连接 Agent 后端，请确认后端已启动后重试。");
+        if (error instanceof Error && error.message.startsWith('Unable to connect to the backend')) {
+          throw new Error("Unable to connect to the Agent backend. Check that it is running, then try again.");
         }
         throw error;
       });
@@ -1151,7 +1152,7 @@ export default function Agent() {
       if (kind === 'today') {
         const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
         let review = await getDailyReview(today);
-        if (!review) throw new Error('今日复盘数据暂时无法读取。');
+        if (!review) throw new Error('Today\'s review data is temporarily unavailable.');
         if (!review.summary_brief && !review.summary) review = await generateDailySummary(today);
         if (!review.trade_review_overview && !review.trade_reviews?.length && !review.trade_review_observations.length) {
           review = await generateTradeReviews(today);
@@ -1174,7 +1175,7 @@ export default function Agent() {
       setMessages([{ id: `preset_${session}_u`, role: 'user', content: prompt }, { id: `preset_${session}_a`, role: 'agent', content: answer }]);
     } catch (error) {
       if (session !== chatSessionRef.current) return;
-      const detail = error instanceof Error ? error.message : '请求失败，请稍后重试。';
+      const detail = error instanceof Error ? error.message : 'Request failed. Please try again later.';
       setMessages([{ id: `preset_${session}_u`, role: 'user', content: prompt }, { id: `preset_${session}_error`, role: 'agent', content: <p role="alert" className="text-rose-600">{detail}</p> }]);
     } finally {
       if (session === chatSessionRef.current) setIsSending(false);
@@ -1534,7 +1535,7 @@ export default function Agent() {
                     <span className="line-clamp-2 text-[12px] font-bold text-[#0B2545]">{item.title || 'New conversation'}</span>
                     {loadingConversation === item.conversation_id && <Loader2 size={13} className="shrink-0 animate-spin text-[#EE6C4D]" />}
                   </div>
-                  <div className="mt-1.5 flex justify-between text-[9px] text-slate-400"><span>{item.message_count} {item.message_count === 1 ? 'message' : 'messages'}</span><span>{new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(item.updated_at))}</span></div>
+                <div className="mt-1.5 flex justify-between text-[9px] text-slate-400"><span>{item.message_count} {item.message_count === 1 ? 'message' : 'messages'}</span><span>{new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(item.updated_at))}</span></div>
                 </button>
               ))}
             </div>

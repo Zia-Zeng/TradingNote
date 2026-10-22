@@ -229,15 +229,15 @@ def normalize_trade_note(trade: dict[str, Any]) -> dict[str, Any]:
     if motive_text and motive_text not in parts:
         parts.append(motive_text)
     plan_parts = []
-    for field, label in (("tp", "止盈"), ("sl", "止损"), ("desc", "后续安排"), ("status", "原计划状态"), ("valid_until", "原计划有效期")):
+    for field, label in (("tp", "Take profit"), ("sl", "Stop loss"), ("desc", "Next steps"), ("status", "Previous plan status"), ("valid_until", "Previous plan valid until")):
         value = plan.get(field)
         if value not in (None, "", 0, "0"):
-            plan_parts.append(f"{label}：{value}")
+            plan_parts.append(f"{label}: {value}")
     if plan_parts:
         parts.append("；".join(plan_parts))
     position_tag = str(motive.get("posTag") or "").strip()
     if position_tag and position_tag != "Close":
-        parts.append(f"原仓位标签：{position_tag}")
+        parts.append(f"Previous position tag: {position_tag}")
     normalized["note"] = "\n\n".join(part for part in parts if part)
     tags = trade.get("note_tags") if isinstance(trade.get("note_tags"), list) and trade["note_tags"] else motive.get("tags")
     normalized["note_tags"] = list(dict.fromkeys(str(tag).strip() for tag in (tags or []) if str(tag).strip()))[:20]
