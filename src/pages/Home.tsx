@@ -420,10 +420,10 @@ export default function Home() {
                   : pnlEntries.length === 1 && pnlEntries[0][1] < 0
                     ? (isSelected ? 'text-rose-200' : 'text-rose-600')
                     : (isSelected ? 'text-white/70' : 'text-slate-400');
-                const pnlTotal = pnlEntries.reduce((sum, [, value]) => sum + value, 0);
-                const pnlCellTone = dayPnl?.complete && pnlTotal > 0
+                const totalPnlBase = dayPnl?.total_pnl_base;
+                const pnlCellTone = dayPnl?.complete && dayPnl.fx_conversion_complete && totalPnlBase != null && totalPnlBase > 0
                   ? isSelected ? '!bg-emerald-600 !text-white' : 'bg-emerald-100 text-emerald-800'
-                  : dayPnl?.complete && pnlTotal < 0
+                  : dayPnl?.complete && dayPnl.fx_conversion_complete && totalPnlBase != null && totalPnlBase < 0
                     ? isSelected ? '!bg-rose-600 !text-white' : 'bg-rose-100 text-rose-700'
                     : isSelected ? '!bg-[#0B2545] !text-white' : 'bg-slate-50 text-slate-500';
                 return (
@@ -439,7 +439,7 @@ export default function Home() {
                   >
                     <span className="text-[11px] font-bold">{day}</span>
                     {pnlLabel && <span title={dayPnl?.complete
-                      ? pnlEntries.map(([currency, value]) => formatPnl(value, currency)).join(' · ')
+                      ? `${pnlEntries.map(([currency, value]) => formatPnl(value, currency)).join(' · ')}${dayPnl.fx_conversion_complete && totalPnlBase != null ? ` · Total ${formatPnl(totalPnlBase, dayPnl.pnl_base_currency || 'CNY')}` : ' · FX conversion unavailable'}`
                       : dayPnl?.reason === 'snapshot_anchor'
                         ? 'Snapshot date: same-day P&L cannot be derived from an end-of-day snapshot.'
                         : `${dayPnl?.snapshot_mismatch ? 'Partial P&L; trade ledger does not reconcile with snapshot' : 'Partial P&L; missing close'}: ${(dayPnl?.missing_instruments || []).map(item => `${item.symbol} (${item.code})`).join(', ') || 'price history incomplete'}`}
@@ -515,8 +515,16 @@ export default function Home() {
                     <section>
                       <h3 className="mb-0.5 text-[11px] font-bold text-[#0B2545]">组合表现</h3>
                       {dailyReview.summary_brief.portfolio.amounts.length > 0 && (
-                        <p className="text-[13px] font-bold text-[#0B2545]">
-                          {dailyReview.summary_brief.portfolio.amounts.map(item => formatBriefAmount(item.amount, item.currency)).join(' ｜ ')}
+                        <p className="text-[13px] font-bold">
+                          {dailyReview.summary_brief.portfolio.amounts.map((item, index) => (
+                            <React.Fragment key={item.currency}>
+                              {index > 0 && <span className="text-[#0B2545]"> ｜ </span>}
+                              <span className="text-[#0B2545]">{item.amount > 0 ? '+' : ''}{item.currency} </span>
+                              <span className={item.amount > 0 ? 'text-emerald-700' : item.amount < 0 ? 'text-rose-700' : 'text-[#0B2545]'}>
+                                {item.amount.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </span>
+                            </React.Fragment>
+                          ))}
                         </p>
                       )}
                     </section>

@@ -4,6 +4,10 @@ M-TradingNote is an AI-powered trading review and discipline coaching product de
 
 A mobile trading journal prototype built with React, TypeScript, Tailwind CSS, and Vite. The screens use sample data.
 
+## Install as a Web App
+
+The production build is a Progressive Web App (PWA). Open the deployed site in a supported browser and use **Install app** or **Add to Home Screen**. The app shell and brand icon are cached for offline launch; API-backed data still requires a network connection and a reachable backend.
+
 ## Run locally
 
 ```sh

@@ -34,7 +34,7 @@ from .storage import create_trade, database, list_trades, normalize_trade_note, 
 router = APIRouter(prefix="/api/today", tags=["today"])
 logger = logging.getLogger(__name__)
 
-PORTFOLIO_ENGINE_VERSION = 4
+PORTFOLIO_ENGINE_VERSION = 5
 PORTFOLIO_ACTIVE_CACHE_SECONDS = 300
 # Increment when Daily Summary rules or its visible output contract changes.
 DAILY_SUMMARY_VERSION = 7
@@ -1097,6 +1097,26 @@ def _portfolio_source_fingerprint(baseline: dict[str, Any], trades: list[dict[st
     return hashlib.sha256(json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+def _latest_fx_close(bars: list[dict[str, Any]], target_date: str) -> float | None:
+    eligible = [bar for bar in bars if bar.get("date") and bar["date"] <= target_date and bar.get("close") is not None]
+    return float(max(eligible, key=lambda bar: bar["date"])["close"]) if eligible else None
+
+
+def _add_base_currency_pnl(days: list[dict[str, Any]], fx_bars: dict[str, list[dict[str, Any]]], base_currency: str = "CNY") -> None:
+    for day in days:
+        converted_total = 0.0
+        complete = True
+        for currency, amount in day.get("pnl_by_currency", {}).items():
+            rate = 1.0 if currency == base_currency else _latest_fx_close(fx_bars.get(currency, []), day["date"])
+            if rate is None:
+                complete = False
+                break
+            converted_total += float(amount) * rate
+        day["total_pnl_base"] = round(converted_total, 4) if complete else None
+        day["pnl_base_currency"] = base_currency
+        day["fx_conversion_complete"] = complete
+
+
 def _cached_portfolio_response(
     rows: list[Any], source_fingerprint: str, start_date: date, end_date: date,
 ) -> dict[str, Any] | None:
@@ -1251,6 +1271,21 @@ async def get_portfolio_pnl(
     unavailable = [(descriptors[key].get("code") or key[2], error) for key, bars, error in loaded if bars is None or not bars]
     result = roll_portfolio(baseline, trades, prices, end_date.isoformat())
     all_days = result["days"]
+    fx_currencies = sorted({currency for day in all_days for currency in day.get("pnl_by_currency", {}) if currency != "CNY"})
+
+    async def load_fx(currency: str) -> tuple[str, list[dict[str, Any]]]:
+        try:
+            response = await fetch_daily_history(f"{currency}CNY=X", "GLOBAL", history_start, end_date)
+            return currency, response.get("bars", [])
+        except Exception as exc:
+            logger.warning("Unable to fetch %s to CNY exchange history: %s", currency, str(exc)[:240])
+            return currency, []
+
+    fx_prices = dict(await asyncio.gather(*(load_fx(currency) for currency in fx_currencies))) if fx_currencies else {}
+    _add_base_currency_pnl(all_days, fx_prices)
+    missing_fx = [currency for currency, bars in fx_prices.items() if not bars]
+    result["warnings"] = [warning for warning in result["warnings"] if warning != "Multiple currencies are shown separately; no FX conversion is applied."]
+    result["warnings"].append("Calendar daily P&L totals are converted to CNY using the latest available daily FX close on or before each date; detailed amounts remain in their original currencies.")
     result["days"] = [day for day in all_days if start_date.isoformat() <= day["date"] <= end_date.isoformat()]
     complete_days = [day for day in result["days"] if day.get("complete")]
     pnl_by_currency: dict[str, float] = {}
@@ -1270,7 +1305,7 @@ async def get_portfolio_pnl(
     result["incomplete_dates"] = [day["date"] for day in result["days"] if not day.get("complete")]
     # The derived table is a materialized view, keyed by account and date.
     # Replacing it transactionally makes historical corrections deterministic.
-    state_fingerprint = hashlib.sha256(json.dumps({"source": source_fingerprint, "prices": {"|".join(key): bars for key, bars in prices.items()}}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    state_fingerprint = hashlib.sha256(json.dumps({"source": source_fingerprint, "prices": {"|".join(key): bars for key, bars in prices.items()}, "fx_prices": fx_prices}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     computed_at = datetime.now(timezone.utc).isoformat()
     if unavailable:
         details = ", ".join(
@@ -1278,8 +1313,10 @@ async def get_portfolio_pnl(
             for code, error in unavailable[:8]
         )
         result["warnings"].insert(0, "Closing-price history unavailable for: " + details + (" and others." if len(unavailable) > 8 else "."))
+    if missing_fx:
+        result["warnings"].insert(0, "FX conversion to CNY unavailable for: " + ", ".join(missing_fx) + ". Calendar colors are neutral until rates are available.")
     result["source"] = "Yahoo Finance first, then BaoStock/AkShare/Wind for A-shares; Wind then Yahoo for US stocks; Yahoo for other tickers"
-    result["currency_policy"] = "Original currencies are retained; no FX conversion is applied."
+    result["currency_policy"] = "Original currency amounts are retained; daily P&L colors use historical FX closes converted to CNY."
     result["cache_hit"] = False
     with database() as connection:
         connection.execute("DELETE FROM today_portfolio_daily_states WHERE account = ?", (baseline["account"],))

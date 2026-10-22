@@ -3,6 +3,9 @@ import { apiRequest } from './api';
 export type DailyPnlDay = {
   date: string;
   pnl_by_currency: Record<string, number>;
+  total_pnl_base?: number | null;
+  pnl_base_currency?: string;
+  fx_conversion_complete?: boolean;
   complete: boolean;
   daily_state?: {
     cash_by_currency: Record<string, number>;
