@@ -214,7 +214,38 @@ def get_conversation(conversation_id: str) -> dict[str, object] | None:
     }
 
 
+def normalize_trade_note(trade: dict[str, Any]) -> dict[str, Any]:
+    """Expose one trade note while retaining content from older motive/plan records."""
+    normalized = {key: value for key, value in trade.items() if key not in {"motive", "plan", "notes"}}
+    motive = trade.get("motive") if isinstance(trade.get("motive"), dict) else {}
+    plan = trade.get("plan") if isinstance(trade.get("plan"), dict) else {}
+    notes = trade.get("notes")
+    parts = [str(trade.get("note") or "").strip()]
+    if isinstance(notes, str) and notes.strip() and notes.strip() not in parts:
+        parts.append(notes.strip())
+    elif isinstance(notes, list):
+        parts.extend(str(item).strip() for item in notes if str(item).strip() and str(item).strip() not in parts)
+    motive_text = str(motive.get("desc") or "").strip()
+    if motive_text and motive_text not in parts:
+        parts.append(motive_text)
+    plan_parts = []
+    for field, label in (("tp", "止盈"), ("sl", "止损"), ("desc", "后续安排"), ("status", "原计划状态"), ("valid_until", "原计划有效期")):
+        value = plan.get(field)
+        if value not in (None, "", 0, "0"):
+            plan_parts.append(f"{label}：{value}")
+    if plan_parts:
+        parts.append("；".join(plan_parts))
+    position_tag = str(motive.get("posTag") or "").strip()
+    if position_tag and position_tag != "Close":
+        parts.append(f"原仓位标签：{position_tag}")
+    normalized["note"] = "\n\n".join(part for part in parts if part)
+    tags = trade.get("note_tags") if isinstance(trade.get("note_tags"), list) and trade["note_tags"] else motive.get("tags")
+    normalized["note_tags"] = list(dict.fromkeys(str(tag).strip() for tag in (tags or []) if str(tag).strip()))[:20]
+    return normalized
+
+
 def create_trade(trade: dict[str, Any]) -> dict[str, Any]:
+    trade = normalize_trade_note(trade)
     now = datetime.now(timezone.utc).isoformat()
     with database() as connection:
         connection.execute(
@@ -230,16 +261,17 @@ def list_trades() -> list[dict[str, Any]]:
         rows = connection.execute(
             "SELECT payload FROM trades ORDER BY updated_at DESC, created_at DESC"
         ).fetchall()
-    return [json.loads(row["payload"]) for row in rows]
+    return [normalize_trade_note(json.loads(row["payload"])) for row in rows]
 
 
 def get_trade(trade_id: str) -> dict[str, Any] | None:
     with database() as connection:
         row = connection.execute("SELECT payload FROM trades WHERE id = ?", (trade_id,)).fetchone()
-    return json.loads(row["payload"]) if row else None
+    return normalize_trade_note(json.loads(row["payload"])) if row else None
 
 
 def update_trade(trade_id: str, trade: dict[str, Any]) -> dict[str, Any] | None:
+    trade = normalize_trade_note(trade)
     now = datetime.now(timezone.utc).isoformat()
     with database() as connection:
         previous = connection.execute("SELECT payload FROM trades WHERE id = ?", (trade_id,)).fetchone()

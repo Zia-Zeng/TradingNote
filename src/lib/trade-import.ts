@@ -13,8 +13,8 @@ export type ImportedTradeDraft = {
   qty: number;
   amount?: number;
   fee?: number;
-  motive?: { posTag?: string; tags?: string[]; desc?: string };
-  plan?: { tp?: string | number; sl?: string | number; desc?: string; status?: 'active' | 'completed' | 'cancelled'; valid_until?: string };
+  note?: string;
+  note_tags?: string[];
 };
 
 export type FileImportPreview = {
@@ -22,7 +22,7 @@ export type FileImportPreview = {
   warnings: string[];
 };
 
-const HEADER_ALIASES: Record<keyof Omit<ImportedTradeDraft, 'motive' | 'plan'>, string[]> = {
+const HEADER_ALIASES: Record<keyof Omit<ImportedTradeDraft, 'note_tags'>, string[]> = {
   time: ['time', 'datetime', 'date', 'trade time', 'trade date', '成交时间', '成交日期', '日期', '时间'],
   type: ['type', 'side', 'direction', 'action', '买卖方向', '方向', '交易方向', '操作'],
   symbol: ['symbol', 'name', 'security', 'stock', '标的', '证券名称', '股票名称', '名称'],
@@ -34,6 +34,7 @@ const HEADER_ALIASES: Record<keyof Omit<ImportedTradeDraft, 'motive' | 'plan'>, 
   qty: ['qty', 'quantity', 'shares', 'volume', '成交数量', '数量', '股数'],
   amount: ['amount', 'turnover', '成交金额', '金额'],
   fee: ['fee', 'fees', 'commission', 'transaction fee', '费用', '手续费', '交易税费'],
+  note: ['note', 'notes', 'trade note', '交易笔记', '交易备注', '备注'],
 };
 
 const normalizeHeader = (value: unknown) => String(value ?? '').trim().toLowerCase().replace(/[\s_\-()（）]/g, '');
@@ -122,6 +123,7 @@ function rowToTrade(row: Record<string, unknown>, rowNumber: number): { trade?: 
       qty: qty!,
       amount: numberValue(lookup(row, 'amount')),
       fee: numberValue(lookup(row, 'fee')),
+      note: normalizeText(lookup(row, 'note')) || undefined,
     },
   };
 }

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Search, Tag, Target, Image as ImageIcon, Plus, Trash2 } from 'lucide-react';
+import { X, Search, Tag, Image as ImageIcon, Plus, Trash2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { apiRequest } from '../lib/api';
 import { currentLocalDate, hasTradeDate, tradeDateTimeFields } from '../lib/trade-time';
@@ -47,16 +47,10 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onS
   const [direction, setDirection] = useState<'Buy' | 'Sell'>('Buy');
   const [price, setPrice] = useState('');
   const [qty, setQty] = useState('');
-  const [posTag, setPosTag] = useState('Close');
-  const [tags, setTags] = useState<string[]>(['Stop Loss', 'Take Profit', 'Trend']);
+  const [tags, setTags] = useState<string[]>([]);
   const [customTags, setCustomTags] = useState<string[]>([]);
   const [newTag, setNewTag] = useState('');
-  const [planDesc, setPlanDesc] = useState('');
-  const [planStatus, setPlanStatus] = useState('');
-  const [planValidUntil, setPlanValidUntil] = useState('');
-  const [motiveDesc, setMotiveDesc] = useState('');
-  const [tp, setTp] = useState('');
-  const [sl, setSl] = useState('');
+  const [noteText, setNoteText] = useState('');
 
   useEffect(() => {
     const query = symbol.trim();
@@ -101,22 +95,16 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onS
       setTradeClock(tradeDateTime.time);
       setDirection(initialData.type === 'Sell' ? 'Sell' : 'Buy');
       setPrice(initialData.price || '');
-      setPlanStatus(initialData.plan?.status || '');
-      setPlanValidUntil(initialData.plan?.valid_until || '');
       setQty(initialData.qty || '');
-      setPosTag(initialData.motive?.posTag || 'Close');
-      setTags(initialData.motive?.tags || []);
+      setTags(initialData.note_tags || []);
       const standardOptions = initialData.type === 'Buy' ? buyMotiveOptions : sellMotiveOptions;
-      setCustomTags((initialData.motive?.tags || []).filter((tag: string) => !standardOptions.includes(tag)));
+      setCustomTags((initialData.note_tags || []).filter((tag: string) => !standardOptions.includes(tag)));
       setNewTag('');
-      setTp(initialData.plan?.tp || '');
-      setSl(initialData.plan?.sl || '');
-      setPlanDesc(initialData.plan?.desc || '');
-      setMotiveDesc(initialData.motive?.desc || '');
+      setNoteText(initialData.note || '');
       setActiveTab('manual');
     } else {
       setSymbol(''); setCode(''); setMarket('CN'); setCurrency('CNY'); setAssetClass('Stock'); setTradeDate(defaultTradeDate || currentLocalDate()); setTradeClock(''); setPrice(''); setQty(''); setTags([]); setCustomTags([]); setNewTag('');
-      setTp(''); setSl(''); setPlanDesc(''); setPlanStatus(''); setPlanValidUntil(''); setMotiveDesc(''); setPosTag('Close'); setDirection('Buy');
+      setNoteText(''); setDirection('Buy');
       setActiveTab(defaultTab);
     }
   }, [initialData, isOpen, defaultTab, defaultTradeDate]);
@@ -167,7 +155,7 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onS
       return;
     }
     const data = {
-      symbol, code: code || undefined, market, currency: originalCurrency, assetClass, tradeDate, tradeClock, direction, price, qty, posTag, tags, tp, sl, planDesc, planStatus, planValidUntil, motiveDesc
+      symbol, code: code || undefined, market, currency: originalCurrency, assetClass, tradeDate, tradeClock, direction, price, qty, note: noteText.trim(), note_tags: tags
     };
     setIsSaving(true);
     try {
@@ -303,10 +291,10 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onS
                     </div>
                   </div>
 
-                  {/* Motive */}
+                  {/* Trade note */}
                   <div>
-                    <div className="text-[14px] font-bold text-[#0B2545] mb-2 flex items-center gap-1.5"><Tag size={14} className="text-[#EE6C4D]" /> Motive</div>
-                    <div className="text-[10px] text-slate-500 mb-1.5 font-bold uppercase tracking-wider">{direction} motives (select multiple)</div>
+                    <div className="text-[14px] font-bold text-[#0B2545] mb-2 flex items-center gap-1.5"><Tag size={14} className="text-[#EE6C4D]" /> Note</div>
+                    <div className="text-[10px] text-slate-500 mb-1.5 font-bold uppercase tracking-wider">{direction} tags (optional)</div>
                     <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
                       {[...(direction === 'Buy' ? buyMotiveOptions : sellMotiveOptions).filter(tag => !deletedMotiveOptions[direction].includes(tag)), ...customTags].map(tag => (
                         <button
@@ -319,7 +307,7 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onS
                       ))}
                       <button
                         onClick={() => { setIsAddingTag(value => !value); setIsDeletingTags(false); }}
-                        aria-label="Add motive tag"
+                        aria-label="Add note tag"
                         className="w-7 h-7 inline-flex items-center justify-center rounded-full border border-slate-300 bg-white text-slate-600 hover:border-[#EE6C4D] hover:text-[#EE6C4D]"
                       ><Plus size={14} /></button>
                       {isAddingTag && (
@@ -331,50 +319,23 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onS
                             if (event.key === 'Enter') { event.preventDefault(); addCustomTag(); }
                             if (event.key === 'Escape') { setIsAddingTag(false); setNewTag(''); }
                           }}
-                          placeholder="New motive tag"
+                          placeholder="New note tag"
                           className="w-36 bg-white border border-[#EE6C4D]/50 rounded-full px-3 py-1.5 text-[11px] focus:outline-none focus:border-[#EE6C4D]"
                         />
                       )}
                       <button
                         onClick={() => { setIsDeletingTags(value => !value); setIsAddingTag(false); }}
-                        aria-label={isDeletingTags ? 'Finish deleting tags' : 'Delete motive tags'}
+                        aria-label={isDeletingTags ? 'Finish deleting tags' : 'Delete note tags'}
                         className={cn("w-7 h-7 inline-flex items-center justify-center rounded-full border transition-colors", isDeletingTags ? "border-rose-300 bg-rose-50 text-rose-600" : "border-slate-300 bg-white text-slate-500 hover:border-rose-300 hover:text-rose-600")}
                       ><Trash2 size={13} /></button>
                     </div>
                     <textarea 
-                      value={motiveDesc} onChange={e => setMotiveDesc(e.target.value)}
-                      placeholder="Personal logic (e.g. short-term logic invalidated after...)"
-                      className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-[12px] min-h-[60px] focus:outline-none focus:border-[#EE6C4D] resize-none shadow-sm placeholder:text-slate-400 text-[#0B2545]"
+                      value={noteText} onChange={e => setNoteText(e.target.value)}
+                      placeholder={'为什么要这样交易？\n下一步准备怎么做呢？'}
+                      aria-label="交易笔记"
+                      maxLength={10000}
+                      className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-[12px] min-h-[76px] focus:outline-none focus:border-[#EE6C4D] resize-y shadow-sm placeholder:text-slate-400 text-[#0B2545]"
                     />
-                  </div>
-
-                  {/* Plan */}
-                  <div>
-                    <div className="text-[14px] font-bold text-[#0B2545] mb-2 flex items-center justify-between">
-                      <div className="flex items-center gap-1.5"><Target size={14} className="text-[#EE6C4D]" /> Trade Plan</div>
-                    </div>
-                    <div className="flex gap-2.5 mb-2.5">
-                      <div className="flex-1 bg-white border border-slate-200 rounded-lg p-2.5 flex flex-col justify-center shadow-sm relative overflow-hidden">
-                        <span className="text-[9px] font-bold text-slate-500 mb-0.5 uppercase tracking-wide">Take Profit</span>
-                        <input value={tp} onChange={e => setTp(e.target.value)} type="number" placeholder="0.00" className="w-full text-left bg-transparent text-[14px] font-bold font-mono focus:outline-none text-[#0B2545] placeholder:text-slate-300" />
-                      </div>
-                      <div className="flex-1 bg-white border border-slate-200 rounded-lg p-2.5 flex flex-col justify-center shadow-sm relative overflow-hidden">
-                        <span className="text-[9px] font-bold text-slate-500 mb-0.5 uppercase tracking-wide">Stop Loss</span>
-                        <input value={sl} onChange={e => setSl(e.target.value)} type="number" placeholder="0.00" className="w-full text-left bg-transparent text-[14px] font-bold font-mono focus:outline-none text-[#0B2545] placeholder:text-slate-300" />
-                      </div>
-                    </div>
-                    <textarea 
-                      value={planDesc} onChange={e => setPlanDesc(e.target.value)}
-                      placeholder="Plan details (e.g. strict exit on 5-day MA break)..."
-                      className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-[12px] min-h-[60px] focus:outline-none focus:border-[#EE6C4D] resize-none shadow-sm placeholder:text-slate-400 text-[#0B2545]"
-                    />
-                    <div className="mt-2 flex gap-2">
-                      <select value={planStatus} onChange={e => setPlanStatus(e.target.value)} aria-label="Plan status" className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white p-2 text-[11px] text-[#0B2545]">
-                        <option value="">No ongoing status</option><option value="active">Active plan</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option>
-                      </select>
-                      <input type="date" value={planValidUntil} onChange={e => setPlanValidUntil(e.target.value)} aria-label="Plan valid until" className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white p-2 text-[11px] text-[#0B2545]" />
-                    </div>
-                    <p className="mt-1 text-[10px] text-slate-400">Active means this plan still applies to a position you have imported. The end date is optional.</p>
                   </div>
                 </div>
               ) : <TradeImportDrawer isOpen embedded defaultTradeDate={defaultTradeDate} onClose={onClose} onImported={items => { onImported?.(items); onClose(); }} />}

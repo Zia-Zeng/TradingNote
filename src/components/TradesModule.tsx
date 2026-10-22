@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { MessageCircle, Edit3, Plus, Target, Tag, Edit2, Trash2, Loader2, AlertTriangle, ChevronRight } from 'lucide-react';
+import { MessageCircle, Edit3, Plus, Tag, Edit2, Trash2, Loader2, AlertTriangle, ChevronRight } from 'lucide-react';
 import { cn } from '../lib/utils';
 import RecordDrawer from './RecordDrawer';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -28,8 +28,8 @@ type TradeRecord = {
   fee?: number | string;
   closeVsFill?: string;
   closeVsFillColor?: string;
-  motive?: { posTag?: string; tags?: string[]; desc?: string };
-  plan?: { tp?: number | string; sl?: number | string; desc?: string; status?: 'active' | 'completed' | 'cancelled'; valid_until?: string };
+  note?: string;
+  note_tags?: string[];
   modifiedAt?: string;
 };
 
@@ -37,8 +37,8 @@ const normalizeTrade = (trade: TradeRecord): TradeRecord => ({
   ...trade,
   code: trade.code || '',
   amount: trade.amount ?? Number(trade.price) * Number(trade.qty),
-  motive: { ...trade.motive, tags: trade.motive?.tags || [] },
-  plan: trade.plan || {},
+  note: trade.note || '',
+  note_tags: trade.note_tags || [],
 });
 
 const formatAmount = (amount: number | string | undefined, currency?: string) => formatCurrencyAmount(amount, currency || 'CNY');
@@ -196,8 +196,8 @@ export default function TradesModule({ isCard = false, tradeDate, view = 'day' }
       amount,
       closeVsFill: editingTrade?.closeVsFill || '--',
       closeVsFillColor: editingTrade?.closeVsFillColor || 'text-slate-400',
-      motive: { posTag: data.posTag, tags: data.tags, desc: data.motiveDesc },
-      plan: { tp: data.tp || undefined, sl: data.sl || undefined, desc: data.planDesc, status: data.planStatus || undefined, valid_until: data.planValidUntil || undefined },
+      note: data.note,
+      note_tags: data.note_tags,
       modifiedAt: editingTrade ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
     };
 
@@ -345,54 +345,31 @@ export default function TradesModule({ isCard = false, tradeDate, view = 'day' }
                 </div>
               </div>
               
-              {/* Motive & Plan Inline */}
+              {/* Trade note */}
               <div className="bg-slate-50 border border-slate-100 rounded-lg p-2.5">
                 <div className="flex justify-between items-center mb-2">
                   <div className="flex items-center gap-1.5">
                     <Tag size={12} className="text-[#EE6C4D]" />
-                    <span className="text-[11px] font-bold text-[#0B2545]">Motive & Plan</span>
+                    <span className="text-[11px] font-bold text-[#0B2545]">Note</span>
                   </div>
                   {trade.modifiedAt && (
                     <span className="text-[9px] text-slate-400 font-mono italic">Modified {trade.modifiedAt}</span>
                   )}
                 </div>
                 
-                {(trade.motive?.tags?.length ?? 0) > 0 && <div className="flex flex-wrap gap-1.5 mb-2.5">
-                  {trade.motive?.tags?.map((t: string) => (
+                {(trade.note_tags?.length ?? 0) > 0 && <div className="flex flex-wrap gap-1.5 mb-2.5">
+                  {trade.note_tags?.map((t: string) => (
                     <span key={t} className="bg-white border border-slate-200 text-slate-600 px-1.5 py-0.5 rounded text-[9px] font-bold shadow-sm">{t}</span>
                   ))}
                 </div>}
                 
-                {trade.motive?.desc && (
-                  <p className="text-[11px] text-slate-600 leading-relaxed font-medium mb-2.5">
-                    {trade.motive.desc}
+                {trade.note && (
+                  <p className="whitespace-pre-wrap text-[11px] text-slate-600 leading-relaxed font-medium">
+                    {trade.note}
                   </p>
                 )}
-                
-                {((trade.plan?.tp && Number(trade.plan.tp) > 0) || (trade.plan?.sl && Number(trade.plan.sl) > 0)) && (
-                  <div className="flex items-center gap-3 mb-2 text-[9px] text-slate-500 font-medium">
-                    {trade.plan?.tp && Number(trade.plan.tp) > 0 && (
-                      <div className="flex items-center gap-1">
-                        <span className="uppercase tracking-wider">TP</span>
-                        <span className="font-mono text-slate-600">{Number(trade.plan.tp).toFixed(2)}</span>
-                      </div>
-                    )}
-                    {trade.plan?.sl && Number(trade.plan.sl) > 0 && (
-                      <div className="flex items-center gap-1">
-                        <span className="uppercase tracking-wider">SL</span>
-                        <span className="font-mono text-slate-600">{Number(trade.plan.sl).toFixed(2)}</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-                
-                {trade.plan?.desc && (
-                  <p className="text-[10px] text-slate-500 leading-relaxed italic border-l-2 border-slate-200 pl-2">
-                    {trade.plan.desc}
-                  </p>
-                )}
-                {!(trade.motive?.tags?.length || trade.motive?.desc || (trade.plan?.tp && Number(trade.plan.tp) > 0) || (trade.plan?.sl && Number(trade.plan.sl) > 0) || trade.plan?.desc) && (
-                  <button onClick={() => handleEdit(trade)} className="text-left text-[10px] text-slate-400 hover:text-[#EE6C4D]">Not added yet. Use Edit to add a motive and plan.</button>
+                {!trade.note && !trade.note_tags?.length && (
+                  <button onClick={() => handleEdit(trade)} className="text-left text-[10px] text-slate-400 hover:text-[#EE6C4D]">No trade note yet. Use Edit to add one.</button>
                 )}
               </div>
               {savedReviews[trade.symbol] && (

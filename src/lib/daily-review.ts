@@ -12,8 +12,6 @@ export type DailyTradeReview = {
 
 export type DailyTradeReviewStats = {
   trade_count: number;
-  motive_count: number;
-  plan_count: number;
   trade_note_count: number;
   daily_note_count: number;
   asset_note_count?: number;
@@ -51,6 +49,7 @@ export type DailySummaryFacts = {
     status?: 'complete' | 'no_session' | 'unavailable';
     source?: string | null;
   }>;
+  market_commodities?: Array<{ market: string; name: string; code: string; date: string; close: number | null; change_pct: number | null; source: string | null; status: string }>;
   industry_performance?: Array<{
     index_code: string;
     name: string;
@@ -63,6 +62,7 @@ export type DailySummaryFacts = {
     source_url: string;
   }>;
   market_sector_performance?: Array<{ index_code: string; name: string; date: string; change_pct: number | null; status: 'complete' | 'no_session' | 'unavailable'; source?: string }>;
+  market_breadth?: { status: string; date?: string; up?: number; down?: number; flat?: number | null; source?: string; title?: string; url?: string };
   industry_status?: 'complete' | 'unavailable';
   market_news?: DailyMarketNews[];
   market_news_warning?: string | null;
@@ -72,11 +72,12 @@ export type DailySummaryBrief = {
   report_type: 'market_portfolio_daily_brief';
   review_date: string;
   overall_status: 'partial' | 'unavailable';
-  market: { text: string; indices: Array<{ name: string; change_pct: number; date: string; source?: string | null }>; sectors: Array<{ name: string; change_pct: number; related_holdings: string[]; date: string; source?: string | null }>; leaders?: Array<{ name: string; change_pct: number }>; laggards?: Array<{ name: string; change_pct: number }> };
-  narrative?: { market_narrative: string; portfolio_narrative: string; insight: string };
+  market: { text: string; indices: Array<{ name: string; change_pct: number; date: string; source?: string | null }>; sectors: Array<{ name: string; change_pct: number; related_holdings: string[]; date: string; source?: string | null }>; commodities?: Array<{ name: string; code: string; close: number; change_pct: number; currency: string; unit: string; date: string; source?: string | null }>; leaders?: Array<{ name: string; change_pct: number }>; laggards?: Array<{ name: string; change_pct: number }>; breadth?: { status: string; date?: string; up?: number; down?: number; flat?: number | null; source?: string; title?: string; url?: string } | null };
+  narrative?: { insight?: string; market_narrative?: string; portfolio_narrative?: string };
   portfolio: { status: 'calculated' | 'unavailable'; scope: 'imported_portfolio'; amounts: Array<{ currency: string; amount: number }>; daily_return_pct: null; text: string };
   winners: Array<{ name: string; code?: string | null; currency: string; amount: number; status: 'calculated' }>;
   losers: Array<{ name: string; code?: string | null; currency: string; amount: number; status: 'calculated' }>;
+  contributions_by_market?: Array<{ market: string; market_name: string; currency: string; winners: Array<{ name: string; code?: string | null; amount: number }>; losers: Array<{ name: string; code?: string | null; amount: number }> }>;
   caveats: string[];
 };
 
@@ -92,7 +93,7 @@ export type DailyMarketNews = {
 export type DailyReview = {
   trade_date: string;
   trade_count: number;
-  trade_review_mode: 'execution_review' | 'fact_based_review' | 'plan_tracking' | 'empty';
+  trade_review_mode: 'execution_review' | 'fact_based_review' | 'note_tracking' | 'empty';
   trade_review_observations: string[];
   summary: string | null;
   summary_brief?: DailySummaryBrief | null;

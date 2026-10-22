@@ -74,13 +74,13 @@ The API calculates chart values, rather than accepting model-generated numbers. 
 
 Chat history is stored locally in `backend/data/tradingnote.sqlite3`, which is created automatically when the backend starts and is ignored by Git. The backend exposes `GET /api/agent/conversations` to list recent conversations and `GET /api/agent/conversations/{conversation_id}` to load one conversation. The model receives up to the latest 12 messages as context.
 
-Trade records can be persisted through `GET /api/trades`, `POST /api/trades`, `GET /api/trades/{trade_id}`, `PUT /api/trades/{trade_id}`, and `DELETE /api/trades/{trade_id}`. These endpoints keep the trade card field names used by `TradesModule`, including `type` (`Buy` or `Sell`), `price`, `qty`, `motive.tags`, and `plan.tp/sl/desc`. New records may omit `id`; the backend returns a generated ID. The optional `date` field uses `YYYY-MM-DD`; Today writes the selected journal date so Tracking can align trades with daily bars. Existing records without a date remain readable, but their chart markers cannot be positioned on a specific day.
+Trade records can be persisted through `GET /api/trades`, `POST /api/trades`, `GET /api/trades/{trade_id}`, `PUT /api/trades/{trade_id}`, and `DELETE /api/trades/{trade_id}`. Each trade has one free-text `note` for its reason, intended next step, and any other observation, plus optional `note_tags`. Older saved `motive`, `plan`, and `notes` content is combined into the note when read; subsequent writes use the unified fields. New records may omit `id`; the backend returns a generated ID. The optional `date` field uses `YYYY-MM-DD`; Today writes the selected journal date so Tracking can align trades with daily bars. Existing records without a date remain readable, but their chart markers cannot be positioned on a specific day.
 
 The endpoint accepts an optional `trade_context` object so the Agent can review a specific record:
 
 ```json
 {
-  "message": "Please review this trade against my plan.",
+  "message": "Please review this trade against my note.",
   "conversation_id": null,
   "action": "review",
   "trade_id": "2",
@@ -92,21 +92,13 @@ The endpoint accepts an optional `trade_context` object so the Agent can review 
     "price": 140.0,
     "qty": 100,
     "amount": "¥ 14,000.00",
-    "motive": {
-      "posTag": "Close",
-      "tags": ["Error Fix", "Stop Loss", "My custom tag"],
-      "desc": "Short-term logic broke after a failed intraday bounce."
-    },
-    "plan": {
-      "tp": "170.00",
-      "sl": "145.00",
-      "desc": "Exit if the short-term logic breaks."
-    }
+    "note": "Short-term logic broke after a failed intraday bounce. Next, review whether support holds.",
+    "note_tags": ["Error Fix", "Stop Loss", "My custom tag"]
   }
 }
 ```
 
-The trade object keeps the frontend's existing field names: `type`, `motive.tags`, `motive.desc`, and `plan.tp/sl/desc`. The existing UI displays the system tags as `Stop Loss`, `Take Profit`, `Trend`, `Support Break`, `No Logic`, `Error Fix`, and `Market Dip`; custom strings are also accepted in `motive.tags`.
+The Note section suggests tags for buy and sell trades and accepts custom strings in `note_tags`. The free-text `note` is the only trade-level narrative source used by Trade Review and AI Tracking.
 
 ### Market history and AI Tracking
 
@@ -131,13 +123,8 @@ Example request:
     "shares": 100,
     "buyPrice": 155.0,
     "currentPrice": 140.0,
-    "plan": {
-      "target": 170.0,
-      "stopLoss": 145.0,
-      "desc": "Short-term bounce play, strict hold if above 145"
-    },
     "timeline": [
-      {"id": "1", "type": "Trade", "action": "Buy", "date": "2026-07-09 14:00", "price": 155.0, "qty": 100},
+      {"id": "1", "type": "Trade", "action": "Buy", "date": "2026-07-09 14:00", "price": 155.0, "qty": 100, "note": "Short-term bounce setup; reassess if support breaks."},
       {"id": "n1", "type": "Note", "date": "2026-07-12 09:15", "text": "Need to stick to the stop loss strictly."},
       {"id": "2", "type": "Trade", "action": "Sell", "date": "2026-07-14 14:30", "price": 140.0, "qty": 100}
     ]

@@ -95,7 +95,7 @@ export default function Home() {
   });
 
   const openDailyAgent = () => {
-    const prompt = `请结合 ${selectedDate} 的交易、Motive、Plan、Notes 和历史关联记录，陪我做一次本日复盘。综合交易理由与执行情况，判断哪些决策合理、哪些值得商榷，以及有哪些结论值得继续验证。请引用具体记录；没有证据的地方明确说明，不要给买卖建议。`;
+    const prompt = `请结合 ${selectedDate} 的交易笔记、当日日记、标的笔记和历史关联记录，陪我做一次本日复盘。综合交易理由、笔记里的后续安排与实际执行，判断哪些决策合理、哪些值得商榷，以及有哪些结论值得继续验证。请引用具体记录；没有证据的地方明确说明，不要给买卖建议。`;
     navigate(`/agent?ref=daily-${selectedDate}&prompt=${encodeURIComponent(prompt)}`);
   };
 
@@ -365,14 +365,15 @@ export default function Home() {
             </div>
             <div className="grid grid-cols-7 gap-1 ml-1">
               {calendarCells.map((day, index) => {
-                if (!day) return <div key={`empty-${index}`} className="h-8" />;
+                if (!day) return <div key={`empty-${index}`} className="h-11" />;
                 const dayKey = `${monthKey}-${String(day).padStart(2, '0')}`;
                 const isSelected = dayKey === selectedDate;
                 const dayPnl = pnlByDate.get(dayKey);
                 const pnlEntries = dayPnl ? Object.entries(dayPnl.pnl_by_currency) : [];
-                const pnlValue = pnlEntries.length > 1
-                  ? pnlEntries.slice(0, 2).map(([currency, value]) => `${currency} ${value > 0 ? '+' : ''}${Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value)}`).join(' ')
-                  : pnlEntries.length === 1 ? formatPnl(pnlEntries[0][1], pnlEntries[0][0], true) : dayPnl && !dayPnl.complete ? '—' : '';
+                const pnlLines = pnlEntries.length > 1
+                  ? pnlEntries.slice(0, 2).map(([currency, value]) => `${currency} ${value > 0 ? '+' : ''}${Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value)}`)
+                  : pnlEntries.length === 1 ? [formatPnl(pnlEntries[0][1], pnlEntries[0][0], true)] : [];
+                const pnlValue = pnlLines.join('\n') || (dayPnl && !dayPnl.complete ? '—' : '');
                 const pnlLabel = pnlValue && dayPnl && !dayPnl.complete ? `~${pnlValue}` : pnlValue;
                 const pnlColor = pnlEntries.length === 1 && pnlEntries[0][1] > 0
                   ? (isSelected ? 'text-emerald-200' : 'text-emerald-600')
@@ -391,18 +392,24 @@ export default function Home() {
                     type="button"
                     onClick={() => selectDate(dayKey)}
                     className={cn(
-                      "h-9 min-w-0 cursor-pointer rounded-lg px-0.5 flex flex-col items-center justify-center gap-0.5 leading-none transition-colors active:scale-95",
+                      "h-11 min-w-0 cursor-pointer rounded-lg px-0.5 flex flex-col items-center justify-center gap-1 leading-none transition-colors active:scale-95",
                       pnlCellTone,
                       isSelected && "ring-1 ring-[#EE6C4D] shadow-sm"
                     )}
                   >
-                    <span className="text-[8px] font-bold">{day}</span>
+                    <span className="text-[11px] font-bold">{day}</span>
                     {pnlLabel && <span title={dayPnl?.complete
                       ? pnlEntries.map(([currency, value]) => formatPnl(value, currency)).join(' · ')
                       : dayPnl?.reason === 'snapshot_anchor'
                         ? 'Snapshot date: same-day P&L cannot be derived from an end-of-day snapshot.'
                         : `${dayPnl?.snapshot_mismatch ? 'Partial P&L; trade ledger does not reconcile with snapshot' : 'Partial P&L; missing close'}: ${(dayPnl?.missing_instruments || []).map(item => `${item.symbol} (${item.code})`).join(', ') || 'price history incomplete'}`}
-                      className={cn("max-w-full truncate text-[6px] font-semibold font-mono", pnlColor)}>{pnlLabel}</span>}
+                      className={cn("max-w-full text-[7px] leading-[8px] font-semibold font-mono", pnlEntries.length > 1 && "flex flex-col gap-px")}>{pnlEntries.length > 1
+                        ? pnlLines.map((line, lineIndex) => {
+                          const value = pnlEntries[lineIndex][1];
+                          const lineColor = value > 0 ? isSelected ? 'text-emerald-200' : 'text-emerald-600' : value < 0 ? isSelected ? 'text-rose-200' : 'text-rose-600' : pnlColor;
+                          return <span key={pnlEntries[lineIndex][0]} className={cn("max-w-full truncate", lineColor)}>{dayPnl && !dayPnl.complete ? '~' : ''}{line}</span>;
+                        })
+                        : <span className={cn("max-w-full truncate", pnlColor)}>{pnlLabel}</span>}</span>}
                   </button>
                 );
               })}
@@ -436,8 +443,34 @@ export default function Home() {
                   <div className="space-y-2.5">
                     <section>
                       <h3 className="mb-0.5 text-[11px] font-bold text-[#0B2545]">市场表现</h3>
-                      <p className="text-[11px] leading-relaxed text-[#134074]">{dailyReview.summary_brief.market.text}</p>
-                      {dailyReview.summary_brief.narrative?.market_narrative && <p className="mt-1 text-[11px] leading-relaxed text-slate-600">{dailyReview.summary_brief.narrative.market_narrative}</p>}
+                      {dailyReview.summary_brief.market.text && <p className="text-[11px] leading-relaxed text-[#134074]">{dailyReview.summary_brief.market.text}</p>}
+                      {dailyReview.summary_brief.market.sectors.length > 0 && (
+                        <div className="mt-1 space-y-0.5 text-[11px] leading-relaxed text-slate-600">
+                          <p className="font-semibold">持仓关联行业</p>
+                          {dailyReview.summary_brief.market.sectors.map(sector => (
+                            <p key={`${sector.name}-${sector.date}`}>
+                              {sector.name} {sector.change_pct > 0 ? '+' : ''}{sector.change_pct.toFixed(2)}%
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                      {((dailyReview.summary_brief.market.leaders?.length ?? 0) > 0 || (dailyReview.summary_brief.market.laggards?.length ?? 0) > 0) && (
+                        <div className="mt-1 space-y-0.5 text-[11px] leading-relaxed text-slate-600">
+                          {!!dailyReview.summary_brief.market.leaders?.length && <p>板块偏强：{dailyReview.summary_brief.market.leaders.map(item => `${item.name} ${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`).join('、')}</p>}
+                          {!!dailyReview.summary_brief.market.laggards?.length && <p>板块偏弱：{dailyReview.summary_brief.market.laggards.map(item => `${item.name} ${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`).join('、')}</p>}
+                        </div>
+                      )}
+                      {dailyReview.summary_brief.market.breadth?.status === 'complete' && (
+                        <p className="mt-1 text-[11px] leading-relaxed text-slate-600">
+                          A股前一交易日（{dailyReview.summary_brief.market.breadth.date}）：上涨 {dailyReview.summary_brief.market.breadth.up} 只、下跌 {dailyReview.summary_brief.market.breadth.down} 只{dailyReview.summary_brief.market.breadth.flat != null ? `、平盘 ${dailyReview.summary_brief.market.breadth.flat} 只` : ''}
+                          {dailyReview.summary_brief.market.breadth.url && <> · <a href={dailyReview.summary_brief.market.breadth.url} target="_blank" rel="noreferrer" className="text-[#134074] underline">{dailyReview.summary_brief.market.breadth.source || '来源'}</a></>}
+                        </p>
+                      )}
+                      {dailyReview.summary_brief.market.commodities?.map(item => (
+                        <p key={item.code} className="mt-1 text-[11px] leading-relaxed text-slate-600">
+                          {item.name} {item.currency}/{item.unit} {item.close.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({item.change_pct > 0 ? '+' : ''}{item.change_pct.toFixed(2)}%)
+                        </p>
+                      ))}
                     </section>
                     <section>
                       <h3 className="mb-0.5 text-[11px] font-bold text-[#0B2545]">组合表现</h3>
@@ -446,13 +479,20 @@ export default function Home() {
                           {dailyReview.summary_brief.portfolio.amounts.map(item => formatBriefAmount(item.amount, item.currency)).join(' ｜ ')}
                         </p>
                       )}
-                      {dailyReview.summary_brief.narrative?.portfolio_narrative && <p className="mt-1 text-[11px] leading-relaxed text-slate-600">{dailyReview.summary_brief.narrative.portfolio_narrative}</p>}
                     </section>
-                    {(dailyReview.summary_brief.winners.length > 0 || dailyReview.summary_brief.losers.length > 0) && (
+                    {((dailyReview.summary_brief.contributions_by_market?.length ?? 0) > 0 || dailyReview.summary_brief.winners.length > 0 || dailyReview.summary_brief.losers.length > 0) && (
                       <section>
-                        <h3 className="mb-0.5 text-[11px] font-bold text-[#0B2545]">主要贡献与拖累</h3>
-                        {dailyReview.summary_brief.winners.length > 0 && <p className="text-[11px] leading-relaxed text-emerald-700">正贡献：{dailyReview.summary_brief.winners.map(item => `${item.name} ${formatBriefAmount(item.amount, item.currency)}`).join('、')}</p>}
-                        {dailyReview.summary_brief.losers.length > 0 && <p className="text-[11px] leading-relaxed text-rose-700">负贡献：{dailyReview.summary_brief.losers.map(item => `${item.name} ${formatBriefAmount(item.amount, item.currency)}`).join('、')}</p>}
+                        <h3 className="mb-0.5 text-[11px] font-bold text-[#0B2545]">分市场标的盈亏贡献</h3>
+                        {dailyReview.summary_brief.contributions_by_market?.length ? dailyReview.summary_brief.contributions_by_market.map(group => (
+                          <div key={`${group.market}-${group.currency}`} className="text-[11px] leading-relaxed">
+                            <p className="font-semibold text-slate-700">{group.market_name}（{group.currency}）</p>
+                            {group.winners.length > 0 && <p className="text-emerald-700">正贡献：{group.winners.map(item => `${item.name} ${formatBriefAmount(item.amount, group.currency)}`).join('、')}</p>}
+                            {group.losers.length > 0 && <p className="text-rose-700">负贡献：{group.losers.map(item => `${item.name} ${formatBriefAmount(item.amount, group.currency)}`).join('、')}</p>}
+                          </div>
+                        )) : <>
+                          {dailyReview.summary_brief.winners.length > 0 && <p className="text-[11px] leading-relaxed text-emerald-700">正贡献：{dailyReview.summary_brief.winners.map(item => `${item.name} ${formatBriefAmount(item.amount, item.currency)}`).join('、')}</p>}
+                          {dailyReview.summary_brief.losers.length > 0 && <p className="text-[11px] leading-relaxed text-rose-700">负贡献：{dailyReview.summary_brief.losers.map(item => `${item.name} ${formatBriefAmount(item.amount, item.currency)}`).join('、')}</p>}
+                        </>}
                       </section>
                     )}
                   </div>
@@ -584,7 +624,7 @@ export default function Home() {
                   </button>
                 ) : (
                   <button type="button" onClick={() => void handleGenerateTradeReviews()} disabled={reviewLoading || tradeReviewsGenerating} className="ml-auto rounded-lg bg-[#0B2545] px-2.5 py-1.5 text-[10px] font-bold text-white disabled:opacity-60">
-                    {tradeReviewsGenerating ? 'Analyzing…' : dailyReview?.trade_reviews_generated_at ? 'Regenerate' : dailyReview?.trade_review_mode === 'plan_tracking' ? 'Review notes' : 'Generate trade review'}
+                    {tradeReviewsGenerating ? 'Analyzing…' : dailyReview?.trade_reviews_generated_at ? 'Regenerate' : dailyReview?.trade_review_mode === 'note_tracking' ? 'Review notes' : 'Generate trade review'}
                   </button>
                 )}
               </div>

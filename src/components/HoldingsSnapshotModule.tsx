@@ -11,6 +11,24 @@ function formatAmounts(amounts: Record<string, number> | undefined, signed = fal
   return entries.map(([currency, value]) => `${signed && value > 0 ? '+' : ''}${formatCurrencyAmount(value, currency)}`).join(' · ');
 }
 
+function AmountList({ amounts, signed = false, title, singleClassName, multipleClassName }: {
+  amounts: Record<string, number> | undefined;
+  signed?: boolean;
+  title: string;
+  singleClassName: string;
+  multipleClassName: string;
+}) {
+  const entries = Object.entries(amounts || {}).filter(([, value]) => Number.isFinite(value));
+  if (!entries.length) return <span className={singleClassName}>—</span>;
+  const multiple = entries.length > 1;
+  return <span title={title} aria-label={title} className={multiple ? 'flex min-w-0 flex-col gap-px leading-[1.05]' : 'block min-w-0 truncate'}>
+    {entries.map(([currency, value]) => <span key={currency} className={`${multiple ? multipleClassName : singleClassName} ${multiple ? 'block truncate' : 'truncate'} ${signed ? value > 0 ? 'text-emerald-600' : value < 0 ? 'text-rose-600' : 'text-[#0B2545]' : ''}`}>
+      {multiple && <span className="mr-1 font-sans text-[0.85em] opacity-75">{currency.toUpperCase()}</span>}
+      {signed && value > 0 ? '+' : ''}{formatCurrencyAmount(value, currency)}
+    </span>)}
+  </span>;
+}
+
 function pnlTone(amounts: Record<string, number> | undefined): string {
   const signs = Object.values(amounts || {}).filter(Number.isFinite).map(value => Math.sign(value)).filter(Boolean);
   if (!signs.length || (signs.some(value => value > 0) && signs.some(value => value < 0))) return 'text-[#0B2545]';
@@ -57,25 +75,33 @@ export default function HoldingsSnapshotModule({ pnl, loading, error }: {
       </div>
 
       {loading ? <p className="py-3 text-[10px] text-slate-400">Calculating portfolio…</p> : error ? <p role="alert" className="py-2 text-[10px] text-rose-600">{error}</p> : !hasPortfolioHistory ? <p className="rounded-lg bg-slate-50 p-3 text-[10px] leading-relaxed text-slate-500">Choose a security and import its complete trade history. The ledger will be saved and used to calculate open positions and P&amp;L.</p> : <>
-        <div className="flex items-end justify-between gap-2 border-b border-slate-100 pb-2.5">
+        <div className="flex items-end justify-between gap-2 border-b border-slate-100 pb-1">
           <div className="min-w-0">
             <div className="text-[9px] font-bold uppercase tracking-wide text-slate-400">Position Market Value</div>
-            <div title={positionValue} className="mt-0.5 truncate font-mono text-[22px] font-bold leading-tight text-[#0B2545]">{positionValue}</div>
+            <div className="mt-0.5 min-w-0 font-mono font-bold leading-tight text-[#0B2545]">
+              <AmountList amounts={state?.holdings_market_value_by_currency} title={positionValue} singleClassName="block truncate text-[22px]" multipleClassName="text-[15px]" />
+            </div>
           </div>
           <span className="shrink-0 pb-0.5 text-[8px] font-mono text-slate-400">{latestDay?.date || asOf}</span>
         </div>
-        <div className="grid grid-cols-3 gap-2 pt-2.5">
+        <div className="grid grid-cols-3 gap-2 pt-1">
           <div className="min-w-0">
             <div className="text-[8px] font-bold uppercase tracking-wide text-slate-400">Daily P&amp;L · {latestDay?.date.slice(5) || '—'}</div>
-            <div title={dailyValue} className={`mt-0.5 truncate font-mono text-[10px] font-bold ${latestDay?.complete ? pnlTone(latestDay.pnl_by_currency) : 'text-slate-400'}`}>{dailyValue}</div>
+            <div className={`mt-0.5 min-w-0 font-mono font-bold ${latestDay?.complete ? pnlTone(latestDay.pnl_by_currency) : 'text-slate-400'}`}>
+              <AmountList amounts={latestDay?.complete ? latestDay.pnl_by_currency : undefined} signed title={dailyValue} singleClassName="block truncate text-[10px]" multipleClassName="text-[8px]" />
+            </div>
           </div>
           <div className="min-w-0 border-l border-slate-100 pl-2">
             <div className="text-[8px] font-bold uppercase tracking-wide text-slate-400">Month P&amp;L</div>
-            <div title={monthValue} className={`mt-0.5 truncate font-mono text-[10px] font-bold ${monthPnl.complete ? pnlTone(monthPnl.amounts) : 'text-slate-400'}`}>{monthValue}</div>
+            <div className={`mt-0.5 min-w-0 font-mono font-bold ${monthPnl.complete ? pnlTone(monthPnl.amounts) : 'text-slate-400'}`}>
+              <AmountList amounts={monthPnl.complete ? monthPnl.amounts : undefined} signed title={monthValue} singleClassName="block truncate text-[10px]" multipleClassName="text-[8px]" />
+            </div>
           </div>
           <div className="min-w-0 border-l border-slate-100 pl-2">
             <div className="text-[8px] font-bold uppercase tracking-wide text-slate-400">Holding P&amp;L</div>
-            <div title={holdingValue} className={`mt-0.5 truncate font-mono text-[10px] font-bold ${state?.complete ? pnlTone(state.holding_pnl_by_currency) : 'text-slate-400'}`}>{holdingValue}</div>
+            <div className={`mt-0.5 min-w-0 font-mono font-bold ${state?.complete ? pnlTone(state.holding_pnl_by_currency) : 'text-slate-400'}`}>
+              <AmountList amounts={state?.complete ? state.holding_pnl_by_currency : undefined} signed title={holdingValue} singleClassName="block truncate text-[10px]" multipleClassName="text-[8px]" />
+            </div>
           </div>
         </div>
       </>}

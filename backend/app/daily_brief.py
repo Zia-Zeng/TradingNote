@@ -20,6 +20,7 @@ INDEX_NAMES = {
     "S&P 500": "标普500",
     "Bitcoin": "比特币",
 }
+COMMODITY_NAMES = {"Gold futures": "黄金期货"}
 SECTOR_NAMES = {
     "Energy": "能源", "Materials": "原材料", "Industrials": "工业",
     "Consumer Discretionary": "可选消费", "Consumer Staples": "必需消费",
@@ -46,6 +47,8 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
     review_date = context["trade_date"]
     indices = []
     for row in context.get("market_benchmarks", []):
+        if str(row.get("market") or "").upper() == "COMMODITY":
+            continue
         change = _number(row.get("change_pct"))
         if row.get("status") != "complete" or row.get("date", review_date) != review_date or change is None:
             continue
@@ -69,6 +72,19 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
         })
     sectors = sectors[:2]
 
+    commodities = []
+    for row in context.get("market_commodities", []):
+        change = _number(row.get("change_pct"))
+        close = _number(row.get("close"))
+        if row.get("status") != "complete" or row.get("date", review_date) != review_date or change is None or close is None:
+            continue
+        commodities.append({
+            "name": COMMODITY_NAMES.get(str(row.get("name")), str(row.get("name") or "大宗商品")),
+            "code": row.get("code"), "close": round(close, 2),
+            "change_pct": round(change, 2), "date": review_date,
+            "currency": "USD", "unit": "盎司",
+            "source": row.get("source"),
+        })
     market_sectors = []
     for row in context.get("market_sector_performance", []):
         change = _number(row.get("change_pct"))
@@ -80,6 +96,9 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
         })
     leaders = sorted(market_sectors, key=lambda item: item["change_pct"], reverse=True)[:2]
     laggards = sorted(market_sectors, key=lambda item: item["change_pct"])[:2]
+    breadth = context.get("market_breadth")
+    if not isinstance(breadth, dict) or breadth.get("status") != "complete":
+        breadth = None
 
     warnings = []
     if not indices:
@@ -89,6 +108,8 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
         market_text += "。"
     if not market_text:
         market_text = "市场数据暂不可用。"
+    if commodities and not indices:
+        market_text = ""
 
     result = context.get("portfolio_result") or {}
     raw_pnl = result.get("pnl_by_currency") or {}
@@ -110,10 +131,11 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
 
     winners: list[dict[str, Any]] = []
     losers: list[dict[str, Any]] = []
-    if len(amounts) > 1:
-        warnings.append("各币种尚未按统一汇率换算，暂不跨币种排列证券贡献。")
-    if portfolio_status == "estimated" and len(amounts) == 1:
-        for currency in [amounts[0]["currency"]]:
+    contributions_by_market: list[dict[str, Any]] = []
+    if portfolio_status == "estimated":
+        # Attribute within each currency independently. Never rank or net
+        # CNY/HKD/USD amounts against one another without an FX conversion.
+        for currency in [item["currency"] for item in amounts]:
             rows = []
             for item in result.get("attribution", []):
                 value = _number(item.get("pnl"))
@@ -129,16 +151,40 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
                 continue
             winners.extend(sorted((row for row in rows if row["amount"] > 0), key=lambda row: -row["amount"])[:3])
             losers.extend(sorted((row for row in rows if row["amount"] < 0), key=lambda row: row["amount"])[:3])
+            market_keys = list(dict.fromkeys(
+                str(item.get("market") or "OTHER").upper()
+                for item in result.get("attribution", [])
+                if item.get("currency") == currency and _number(item.get("pnl")) is not None
+            ))
+            for market in market_keys:
+                market_rows = []
+                for item in result.get("attribution", []):
+                    value = _number(item.get("pnl"))
+                    if item.get("currency") != currency or str(item.get("market") or "OTHER").upper() != market or value is None:
+                        continue
+                    market_rows.append({
+                        "name": str(item.get("symbol") or item.get("code") or "未知证券"),
+                        "code": item.get("code"), "currency": currency,
+                        "amount": round(value, 2), "status": "estimated", "market": market,
+                    })
+                market_winners = sorted((row for row in market_rows if row["amount"] > 0), key=lambda row: -row["amount"])[:3]
+                market_losers = sorted((row for row in market_rows if row["amount"] < 0), key=lambda row: row["amount"])[:3]
+                if market_winners or market_losers:
+                    market_names = {"CN": "A股", "HK": "港股", "US": "美股", "CRYPTO": "加密资产"}
+                    contributions_by_market.append({
+                        "market": market, "market_name": market_names.get(market, market),
+                        "currency": currency, "winners": market_winners, "losers": market_losers,
+                    })
 
     return {
         "report_type": "market_portfolio_daily_brief",
         "review_date": review_date,
-        "overall_status": "partial" if indices or amounts else "unavailable",
-        "market": {"indices": indices, "sectors": sectors, "leaders": leaders, "laggards": laggards, "text": market_text},
+        "overall_status": "partial" if indices or commodities or amounts else "unavailable",
+        "market": {"indices": indices, "sectors": sectors, "commodities": commodities, "leaders": leaders, "laggards": laggards, "breadth": breadth, "text": market_text},
         "portfolio": {
             "status": portfolio_status, "scope": "recorded_securities",
             "amounts": amounts, "daily_return_pct": None, "text": portfolio_text,
         },
-        "winners": winners[:3], "losers": losers[:3],
+        "winners": winners[:3], "losers": losers[:3], "contributions_by_market": contributions_by_market,
         "caveats": warnings[:3],
     }

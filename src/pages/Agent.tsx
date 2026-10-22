@@ -14,6 +14,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { readLocalResult, saveLocalResult } from '../lib/saved-results';
 import { apiRequest } from '../lib/api';
+import { generateDailySummary, generateTradeReviews, getDailyReview, type DailyReview } from '../lib/daily-review';
 
 type ConversationSummary = {
   conversation_id: string;
@@ -35,8 +36,8 @@ type AgentTradeContext = {
   price: number;
   qty: number;
   amount?: string | number;
-  motive?: { posTag?: string; tags?: string[]; desc?: string };
-  plan?: { tp?: string | number; sl?: string | number; desc?: string };
+  note?: string;
+  note_tags?: string[];
 };
 
 interface Message {
@@ -57,10 +58,58 @@ type BehaviorInsights = {
   holdings_as_of: string | null;
 };
 
-const REVIEW_PRESET_QUESTION = 'Can you review my recent trades and point out any mistakes?';
-const INSIGHTS_PRESET_QUESTION = 'Tag me and analyze my recent trading style';
+const TODAY_PRESET_QUESTION = '今天的交易怎么样呢？';
+const REVIEW_PRESET_QUESTION = '请帮我复盘在 JDF 这支股票上的交易';
+const REVIEW_ACTION_QUESTION = '请帮我复盘最近的交易';
+const INSIGHTS_PRESET_QUESTION = '帮我分析一下最近的交易风格';
 const DRAFT_PRESET_QUESTION = 'Help me draft a solid investment plan based on my recent holdings.';
 const INSIGHTS_MESSAGE_PREFIX = 'BEHAVIOR_INSIGHTS_JSON:';
+
+function dailyReviewAnswer(review: DailyReview): string {
+  const sections = [`今日交易复盘（${review.trade_date}）`];
+  const brief = review.summary_brief;
+  if (brief) {
+    sections.push('市场表现', brief.market.text);
+    if (brief.market.sectors.length) sections.push(...brief.market.sectors.map(item => `${item.name} ${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`));
+    if (brief.market.leaders?.length) sections.push(`板块偏强：${brief.market.leaders.map(item => `${item.name} ${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`).join('、')}`);
+    if (brief.market.laggards?.length) sections.push(`板块偏弱：${brief.market.laggards.map(item => `${item.name} ${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%`).join('、')}`);
+    if (brief.market.breadth?.status === 'complete') sections.push(`A股前一交易日（${brief.market.breadth.date}）：上涨 ${brief.market.breadth.up} 只、下跌 ${brief.market.breadth.down} 只${brief.market.breadth.flat != null ? `、平盘 ${brief.market.breadth.flat} 只` : ''}${brief.market.breadth.url ? ` 来源：${brief.market.breadth.url}` : ''}`);
+    if (brief.market.commodities?.length) sections.push(...brief.market.commodities.map(item => `${item.name} ${item.currency}/${item.unit} ${item.close.toFixed(2)} (${item.change_pct > 0 ? '+' : ''}${item.change_pct.toFixed(2)}%)`));
+    sections.push('组合表现', brief.portfolio.amounts.length
+      ? brief.portfolio.amounts.map(item => `${item.currency} ${item.amount > 0 ? '+' : ''}${item.amount.toFixed(2)}`).join(' ｜ ')
+      : '当日组合盈亏暂无可核实数据。');
+    if (brief.narrative?.insight) sections.push(brief.narrative.insight);
+    if (brief.contributions_by_market?.length) {
+      for (const group of brief.contributions_by_market) {
+        if (group.winners.length) sections.push(`${group.market_name} 正贡献：${group.winners.map(row => `${row.name} ${group.currency} ${row.amount.toFixed(2)}`).join('、')}`);
+        if (group.losers.length) sections.push(`${group.market_name} 负贡献：${group.losers.map(row => `${row.name} ${group.currency} ${row.amount.toFixed(2)}`).join('、')}`);
+      }
+    } else {
+      if (brief.winners.length) sections.push(`正贡献：${brief.winners.map(row => `${row.name} ${row.currency} ${row.amount.toFixed(2)}`).join('、')}`);
+      if (brief.losers.length) sections.push(`负贡献：${brief.losers.map(row => `${row.name} ${row.currency} ${row.amount.toFixed(2)}`).join('、')}`);
+    }
+    if (brief.caveats.length) sections.push(`说明：${brief.caveats.join('；')}`);
+  } else if (review.summary) {
+    sections.push('市场与组合日评', review.summary);
+  } else {
+    sections.push('市场与组合日评尚无可用结果。');
+  }
+
+  sections.push('Trade Review');
+  if (review.trade_review_stats) {
+    sections.push(`复盘记录：${review.trade_review_stats.trade_count} 笔交易；相关交易笔记 ${review.trade_review_stats.trade_note_count} 条；当日日记 ${review.trade_review_stats.daily_note_count} 条。`);
+  }
+  if (review.trade_review_overview) sections.push(review.trade_review_overview);
+  if (review.trade_reviews?.length) {
+    sections.push(...review.trade_reviews.map(item => `${item.symbol}${item.title ? ` · ${item.title}` : ''}\n${item.review}${item.follow_up_question ? `\n待补充：${item.follow_up_question}` : ''}`));
+  }
+  if (review.trade_review_observations.length) sections.push(...review.trade_review_observations);
+  if (review.trade_review_questions?.length) sections.push(`待确认问题：${review.trade_review_questions.slice(0, 2).join('；')}`);
+  if (!review.trade_review_overview && !review.trade_reviews?.length && !review.trade_review_observations.length) {
+    sections.push(review.trade_count ? '当日 Trade Review 尚无可用结果。' : '今日没有成交记录。');
+  }
+  return sections.filter(Boolean).join('\n\n');
+}
 
 function parseSavedInsights(content: string): BehaviorInsights | null {
   if (!content.startsWith(INSIGHTS_MESSAGE_PREFIX)) return null;
@@ -495,6 +544,7 @@ export default function Agent() {
   
   const navigate = useNavigate();
   const chatScrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const keepAtBottomRef = useRef(true);
 
   useEffect(() => {
@@ -723,8 +773,8 @@ export default function Agent() {
                 
                 <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 mb-2.5 space-y-2">
                   <div className="text-[11px] text-slate-600 leading-relaxed">
-                    <span className="font-bold text-[#0B2545] block mb-0.5">📌 Your Plan & Motive:</span>
-                    You set the plan to <span className="text-[#EE6C4D] font-bold">'Take profit in tranches at target'</span>. Motive: <span className="text-[#EE6C4D] font-bold">'Right-side breakout'</span>.
+                    <span className="font-bold text-[#0B2545] block mb-0.5">📌 Your Trade Note:</span>
+                    You wrote <span className="text-[#EE6C4D] font-bold">'Right-side breakout; take profit in tranches at target'</span>.
                   </div>
                   <div className="text-[11px] text-slate-600 leading-relaxed border-t border-slate-200 pt-2">
                     <span className="font-bold text-[#0B2545] block mb-0.5">📊 Market & Execution:</span>
@@ -930,7 +980,8 @@ export default function Agent() {
                 const key = `tradingnote:timeline:${planTarget.detailId}`;
                 const records = readLocalResult<any[]>(key) || [];
                 const currentRecord = records.find(record => record.id === planTarget.tradeId) || { id: planTarget.tradeId, type: 'Trade' };
-                const updatedRecord = { ...currentRecord, aiPlan: plan, plan: { ...(currentRecord.plan || {}), tp: plan.target, sl: plan.stopLoss, desc: plan.rule } };
+                const updatedRecord = { ...currentRecord, aiPlan: plan };
+                delete updatedRecord.plan;
                 saveLocalResult(key, [...records.filter(record => record.id !== planTarget.tradeId), updatedRecord]);
                 setSavedPlan(true);
               }}
@@ -946,7 +997,7 @@ export default function Agent() {
       } else if (action === 'review') {
         if (step !== 'followup') {
           setMessages([
-            { id: 'r1_u', role: 'user', content: REVIEW_PRESET_QUESTION },
+            { id: 'r1_u', role: 'user', content: REVIEW_ACTION_QUESTION },
             { id: 'r1_a', role: 'agent', content: <Thinking /> },
           ]);
           const timer = setTimeout(() => setMessages(previous => previous.map(message => message.id === 'r1_a'
@@ -1028,8 +1079,8 @@ export default function Agent() {
               price: Number(storedTrade.price),
               qty: Number(storedTrade.qty),
               amount: storedTrade.amount,
-              motive: storedTrade.motive,
-              plan: storedTrade.plan,
+              note: storedTrade.note,
+              note_tags: storedTrade.note_tags,
             };
           }
         } catch {
@@ -1077,6 +1128,54 @@ export default function Agent() {
       setMessages(prev => prev.filter(m => m.id !== userMsgId && m.id !== pendingId));
       setInput(prev => prev || currentInput);
       setSendError(err instanceof Error ? err.message : 'Failed to send message. Please try again.');
+    } finally {
+      if (session === chatSessionRef.current) setIsSending(false);
+    }
+  };
+
+  const runLandingPrompt = async (kind: 'today' | 'review' | 'insights') => {
+    const prompt = kind === 'today' ? TODAY_PRESET_QUESTION : kind === 'review' ? REVIEW_PRESET_QUESTION : INSIGHTS_PRESET_QUESTION;
+    const session = ++chatSessionRef.current;
+    keepAtBottomRef.current = true;
+    setConversationId(null);
+    setSendError(null);
+    setIsSending(true);
+    setInput('');
+    setMessages([
+      { id: `preset_${session}_u`, role: 'user', content: prompt },
+      { id: `preset_${session}_pending`, role: 'agent', content: <Thinking /> },
+    ]);
+    try {
+      let answer: React.ReactNode;
+      let conversation_id: string | undefined;
+      if (kind === 'today') {
+        const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date());
+        let review = await getDailyReview(today);
+        if (!review) throw new Error('今日复盘数据暂时无法读取。');
+        if (!review.summary_brief && !review.summary) review = await generateDailySummary(today);
+        if (!review.trade_review_overview && !review.trade_reviews?.length && !review.trade_review_observations.length) {
+          review = await generateTradeReviews(today);
+        }
+        answer = <AgentMarkdown text={dailyReviewAnswer(review)} />;
+      } else if (kind === 'review') {
+        const data = await apiRequest<{ conversation_id: string; reply: string }>('/api/agent/chat', {
+          method: 'POST',
+          body: JSON.stringify({ message: prompt, action: 'review', asset: 'JDF' }),
+        });
+        conversation_id = data.conversation_id;
+        answer = <AgentMarkdown text={data.reply} reviewAsset="JDF" />;
+      } else {
+        const data = await apiRequest<BehaviorInsights>('/api/agent/insights', { method: 'POST' });
+        conversation_id = data.conversation_id;
+        answer = <InsightsResult data={data} />;
+      }
+      if (session !== chatSessionRef.current) return;
+      if (conversation_id) setConversationId(conversation_id);
+      setMessages([{ id: `preset_${session}_u`, role: 'user', content: prompt }, { id: `preset_${session}_a`, role: 'agent', content: answer }]);
+    } catch (error) {
+      if (session !== chatSessionRef.current) return;
+      const detail = error instanceof Error ? error.message : '请求失败，请稍后重试。';
+      setMessages([{ id: `preset_${session}_u`, role: 'user', content: prompt }, { id: `preset_${session}_error`, role: 'agent', content: <p role="alert" className="text-rose-600">{detail}</p> }]);
     } finally {
       if (session === chatSessionRef.current) setIsSending(false);
     }
@@ -1152,6 +1251,7 @@ export default function Agent() {
     
     const currentInput = input.trim();
     setInput('');
+    if (inputRef.current) inputRef.current.style.height = '36px';
     const isDailyReview = reference === 'daily-2026-07-14' && currentInput.toLowerCase().includes('review');
     const isAssetTracking = isAssetReference && currentInput.length > 0;
     if (isDailyReview) setSavedTracking(Boolean(readLocalResult('tradingnote:tracking:2026-07-14')));
@@ -1359,19 +1459,15 @@ export default function Agent() {
             <div className="text-[11px] font-bold text-slate-500 mb-3 ml-1 uppercase tracking-wider">Everyone is asking</div>
             <div className="space-y-2.5">
               {[
-                { text: "Review today's trade motivations?", icon: <Sparkles size={12} className="text-[#EE6C4D]"/> },
-                { text: "Analyze Zijin Mining history", icon: <Sparkles size={12} className="text-[#EE6C4D]"/> },
-                { text: "Any recent trading errors?", icon: <Sparkles size={12} className="text-[#EE6C4D]"/> }
+                { text: TODAY_PRESET_QUESTION, kind: 'today' as const },
+                { text: REVIEW_PRESET_QUESTION, kind: 'review' as const },
+                { text: INSIGHTS_PRESET_QUESTION, kind: 'insights' as const },
               ].map((item, idx) => (
                 <button 
                   key={idx}
-                  onClick={() => {
-                    setInput(item.text);
-                    handleSend();
-                  }}
-                  className="w-full bg-white p-3.5 rounded-xl shadow-sm border border-slate-100 text-left flex items-center gap-2.5 active:bg-slate-50 transition-transform active:scale-[0.99]"
+                  onClick={() => void runLandingPrompt(item.kind)}
+                  className="w-full bg-white p-3.5 rounded-xl shadow-sm border border-slate-100 text-left active:bg-slate-50 transition-transform active:scale-[0.99]"
                 >
-                  <div className="bg-[#EE6C4D]/10 p-1.5 rounded-full">{item.icon}</div>
                   <span className="text-[12px] font-bold text-[#0B2545]">{item.text}</span>
                 </button>
               ))}
@@ -1402,7 +1498,7 @@ export default function Agent() {
                 </div>
                 
                 <div className={cn(
-                  "p-2.5 text-[12px] shadow-sm font-medium",
+                  "p-2.5 text-[12px] shadow-sm font-medium whitespace-pre-wrap break-words",
                   msg.role === 'user' 
                     ? "bg-[#0B2545] text-white rounded-[16px] rounded-tr-[4px]" 
                     : "bg-white border border-slate-200 text-slate-800 rounded-[16px] rounded-tl-[4px]"
@@ -1454,13 +1550,6 @@ export default function Agent() {
           {tab === 'chat' && (
             <div className="flex overflow-x-auto no-scrollbar gap-2 mb-2 w-full snap-x">
               <button 
-                onClick={() => handleAction('draft')}
-                className="flex-shrink-0 snap-center bg-white border border-slate-200 text-[#0B2545] px-3 py-1.5 rounded-full text-[11px] font-bold flex items-center gap-1.5 active:bg-slate-50 transition-colors shadow-sm"
-              >
-                <FileText size={14} className="text-[#EE6C4D] shrink-0" /> 
-                <span>Draft Plan</span>
-              </button>
-              <button 
                 onClick={() => handleAction('review')}
                 className="flex-shrink-0 snap-center bg-white border border-slate-200 text-[#0B2545] px-3 py-1.5 rounded-full text-[11px] font-bold flex items-center gap-1.5 active:bg-slate-50 transition-colors shadow-sm"
               >
@@ -1491,9 +1580,6 @@ export default function Agent() {
           )}
 
           <div className="flex items-end gap-2 bg-slate-50 rounded-xl p-1.5 border border-slate-200 focus-within:border-[#0B2545] transition-colors shadow-inner">
-            <div className="p-2 text-slate-400 shrink-0 mb-0.5">
-              <Sparkles size={16} />
-            </div>
             <div className="flex-1 min-w-0 flex items-center gap-1.5">
               {tab === 'chat' && (isDailyReference || isAssetReference) && (
                 <div className="inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded-md bg-[#EE6C4D]/10 border border-[#EE6C4D]/20 text-[9px] font-bold text-[#0B2545]">
@@ -1501,14 +1587,25 @@ export default function Agent() {
                 </div>
               )}
               <textarea
+                ref={inputRef}
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  e.currentTarget.style.height = '36px';
+                  e.currentTarget.style.height = `${Math.min(e.currentTarget.scrollHeight, 160)}px`;
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    handleSend();
+                  }
+                }}
                 placeholder={tab === 'backtest' && searchParams.get('bt_step') === '1'
                   ? "Ticker (601899 or AAPL)..."
                   : action === 'review' && step === 'awaiting_asset'
                     ? "e.g. Zijin Mining or 601899"
                     : "Ask a master what they are buying..."}
-                className="flex-1 min-w-0 w-full max-h-[72px] min-h-[36px] bg-transparent resize-none text-[13px] font-medium text-[#0B2545] p-2 pl-0 focus:outline-none placeholder:text-slate-400"
+                className="flex-1 min-w-0 w-full max-h-[160px] min-h-[36px] overflow-y-auto bg-transparent resize-none text-[13px] font-medium text-[#0B2545] p-2 focus:outline-none placeholder:text-slate-400"
                 rows={1}
               />
             </div>

@@ -77,8 +77,8 @@ export default function TradeImportDrawer({ isOpen, onClose, onImported, embedde
             price: numberOrZero(trade.price), qty: numberOrZero(trade.qty),
             amount: trade.amount == null ? undefined : numberOrZero(trade.amount),
             fee: trade.fee == null ? undefined : numberOrZero(trade.fee),
-            motive: trade.motive as ImportedTradeDraft['motive'],
-            plan: trade.plan as ImportedTradeDraft['plan'],
+            note: String(trade.note || '').trim() || undefined,
+            note_tags: trade.note_tags as ImportedTradeDraft['note_tags'],
           };
         })); setWarnings(preview.warnings);
       } else if (/\.(csv|xlsx|xls|txt)$/i.test(file.name)) {
@@ -181,7 +181,7 @@ export default function TradeImportDrawer({ isOpen, onClose, onImported, embedde
         <button type="button" onClick={addManualRow} className="mt-3 flex w-full items-center justify-center gap-1 rounded-lg border border-dashed border-slate-300 py-2 text-[10px] font-bold text-[#0B2545]"><Plus size={12} /> Add trade manually</button>
         {duplicateMatches?.length ? <div role="alert" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-2.5">
           <p className="text-[11px] font-bold text-amber-900">Possible duplicate upload detected</p>
-          <p className="mt-1 text-[10px] leading-relaxed text-amber-800">{duplicateMatches.length} row(s) match existing trades by date, time, instrument, side, price, and quantity. Skip them or replace the execution fields; saved motive and plan remain intact.</p>
+          <p className="mt-1 text-[10px] leading-relaxed text-amber-800">{duplicateMatches.length} row(s) match existing trades by date, time, instrument, side, price, and quantity. Skip them or replace the execution fields; saved trade notes remain intact.</p>
           {duplicateSourceSeen && <p className="mt-1 text-[10px] text-amber-800">This same file was imported before. Creating another copy is disabled.</p>}
           <div className="mt-2 max-h-20 space-y-1 overflow-y-auto text-[9px] text-amber-800">
             {duplicateMatches.slice(0, 5).map(match => <div key={`${match.row_index}-${match.existing_id || match.duplicate_of_row}`}>Row {match.row_index} · {match.symbol} · {match.trade_date}{match.source === 'upload' ? ` · duplicate of row ${match.duplicate_of_row}` : ' · already in ledger'}</div>)}

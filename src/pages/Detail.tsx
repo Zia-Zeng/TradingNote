@@ -4,7 +4,7 @@ import {
   ChevronLeft, ChevronRight, MoreHorizontal,
   BotMessageSquare, Zap, Sparkles, MessageCircle, Tag, Edit2, Edit3, Plus, Trash2, Loader2, AlertTriangle
 } from 'lucide-react';
-import { ComposedChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, ReferenceLine, Scatter, Brush } from 'recharts';
+import { ComposedChart, Area, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Scatter, Brush } from 'recharts';
 import { cn } from '../lib/utils';
 import { readLocalResult, saveLocalResult, SAVED_RESULTS_EVENT } from '../lib/saved-results';
 import RecordDrawer from '../components/RecordDrawer';
@@ -68,8 +68,8 @@ type TradeRecord = {
   fee?: number | string;
   closeVsFill?: string;
   closeVsFillColor?: string;
-  motive?: { posTag?: string; tags?: string[]; desc?: string };
-  plan?: { tp?: number | string; sl?: number | string; desc?: string };
+  note?: string;
+  note_tags?: string[];
   modifiedAt?: string;
 };
 
@@ -171,9 +171,6 @@ const toTrackingTimeline = (items: UserTimelineItem[]) => items.map(item => {
   if (item.type === 'Note') {
     return { id: item.id, type: 'Note', date: item.created_at, text: item.content };
   }
-  const tp = toPositiveNumber(item.plan?.tp);
-  const sl = toPositiveNumber(item.plan?.sl);
-  const planDesc = optionalText(item.plan?.desc);
   return {
     id: item.id,
     type: item.type,
@@ -183,8 +180,8 @@ const toTrackingTimeline = (items: UserTimelineItem[]) => items.map(item => {
     qty: toPositiveNumber(item.qty),
     amount: Number(item.price) * Number(item.qty),
     closeVsFill: optionalText(item.closeVsFill),
-    motive: item.motive,
-    plan: tp !== undefined || sl !== undefined || planDesc ? { tp, sl, desc: planDesc } : undefined,
+    note: item.note,
+    note_tags: item.note_tags,
   };
 });
 
@@ -270,7 +267,6 @@ export default function Detail() {
       ? sellAmount + netQuantity * (close || 0) - buyAmount
       : null;
     const pnlPercent = totalPnl !== null && buyAmount > 0 ? totalPnl / buyAmount * 100 : null;
-    const plannedTrade = [...assetTrades].reverse().find(trade => trade.plan?.tp || trade.plan?.sl || trade.plan?.desc);
     const sortedTimeline: TimelineItem[] = assetTrades.map(trade => {
       const date = transactionDate(trade);
       const time = transactionTime(trade);
@@ -327,11 +323,6 @@ export default function Detail() {
       netQuantity,
       chartColor: (pnlPercent ?? 0) >= 0 ? '#10b981' : '#f43f5e',
       chartData,
-      plan: {
-        target: toPositiveNumber(plannedTrade?.plan?.tp) ?? null,
-        stopLoss: toPositiveNumber(plannedTrade?.plan?.sl) ?? null,
-        desc: optionalText(plannedTrade?.plan?.desc),
-      },
       timeline: sortedTimeline,
       analysis: {
         overall_summary: 'No AI Tracking result yet. Generate an analysis for this asset.',
@@ -437,8 +428,8 @@ export default function Detail() {
       price: Number(formData.price),
       qty: Number(formData.qty),
       amount: Number(formData.price || 0) * Number(formData.qty || 0),
-      motive: { posTag: formData.posTag, tags: formData.tags, desc: formData.motiveDesc },
-      plan: { tp: formData.tp || undefined, sl: formData.sl || undefined, desc: formData.planDesc || undefined },
+      note: formData.note,
+      note_tags: formData.note_tags,
     };
     const saved = await apiRequest<TradeRecord>(`/api/trades/${encodeURIComponent(original.id)}`, {
       method: 'PUT', body: JSON.stringify(updatedRecord),
@@ -514,11 +505,6 @@ export default function Detail() {
     setIsGeneratingTracking(true);
     setTrackingError(null);
 
-    const plan = {
-      target: toPositiveNumber(data.plan?.target),
-      stopLoss: toPositiveNumber(data.plan?.stopLoss),
-      desc: optionalText(data.plan?.desc)
-    };
     const code = String(data.code ?? '').trim();
     const tradeContext = {
       id: tradeId,
@@ -531,7 +517,6 @@ export default function Detail() {
       shares: toPositiveNumber(data.shares),
       buyPrice: toPositiveNumber(data.buyPrice),
       currentPrice: toPositiveNumber(data.currentPrice),
-      plan: plan.target !== undefined || plan.stopLoss !== undefined || plan.desc ? plan : undefined,
       timeline: toTrackingTimeline(timeline)
     };
 
@@ -687,8 +672,6 @@ export default function Detail() {
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
               <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{fontSize: 9, fill: '#94a3b8', fontWeight: 500}} dy={10} minTickGap={15} />
               <YAxis mirror={true} domain={['dataMin - (dataMax-dataMin)*0.1', 'dataMax + (dataMax-dataMin)*0.1']} tickFormatter={formatPrice} axisLine={false} tickLine={false} tick={{fontSize: 9, fill: '#94a3b8', fontWeight: 500, fontFamily: 'monospace'}} dx={-5} orientation="right" />
-              {data.plan.target !== null && <ReferenceLine y={data.plan.target} stroke="#EE6C4D" strokeDasharray="4 4" label={{ position: 'insideTopLeft', value: `TP ${data.plan.target.toFixed(2)}`, fill: '#EE6C4D', fontSize: 9, fontWeight: 'bold' }} />}
-              {data.plan.stopLoss !== null && <ReferenceLine y={data.plan.stopLoss} stroke="#EE6C4D" strokeDasharray="4 4" label={{ position: 'insideBottomLeft', value: `SL ${data.plan.stopLoss.toFixed(2)}`, fill: '#EE6C4D', fontSize: 9, fontWeight: 'bold' }} />}
               <Area type="monotone" dataKey="price" stroke={data.chartColor} strokeWidth={2} fillOpacity={1} fill="url(#colorPrice)" />
               <Scatter dataKey="buyPrice" shape={<BuyMarker />} />
               <Scatter dataKey="sellPrice" shape={<SellMarker />} />
@@ -802,42 +785,19 @@ export default function Detail() {
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-1.5">
                             <Tag size={12} className="text-[#EE6C4D]" />
-                            <span className="text-[11px] font-bold text-[#0B2545]">Motive & Plan</span>
+                            <span className="text-[11px] font-bold text-[#0B2545]">Note</span>
                           </div>
                         </div>
                         
                         <div className="flex flex-wrap gap-1.5 mb-2.5">
-                          {item.motive?.tags?.map((t: string) => (
+                          {item.note_tags?.map((t: string) => (
                             <span key={t} className="bg-white border border-slate-200 text-slate-600 px-1.5 py-0.5 rounded text-[9px] font-bold shadow-sm">{t}</span>
                           ))}
                         </div>
                         
-                        {item.motive?.desc && (
-                          <p className="text-[11px] text-slate-600 leading-relaxed font-medium mb-2.5">
-                            {item.motive.desc}
-                          </p>
-                        )}
-                        
-                        {((item.plan?.tp && Number(item.plan.tp) > 0) || (item.plan?.sl && Number(item.plan.sl) > 0)) && (
-                          <div className="flex items-center gap-3 mb-2 text-[9px] text-slate-500 font-medium">
-                            {item.plan.tp && Number(item.plan.tp) > 0 && (
-                              <div className="flex items-center gap-1">
-                                <span className="uppercase tracking-wider">TP</span>
-                                <span className="font-mono text-slate-600">{Number(item.plan.tp).toFixed(2)}</span>
-                              </div>
-                            )}
-                            {item.plan.sl && Number(item.plan.sl) > 0 && (
-                              <div className="flex items-center gap-1">
-                                <span className="uppercase tracking-wider">SL</span>
-                                <span className="font-mono text-slate-600">{Number(item.plan.sl).toFixed(2)}</span>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        
-                        {item.plan?.desc && (
-                          <p className="text-[10px] text-slate-500 leading-relaxed italic border-l-2 border-slate-200 pl-2">
-                            {item.plan.desc}
+                        {item.note && (
+                          <p className="whitespace-pre-wrap text-[11px] text-slate-600 leading-relaxed font-medium">
+                            {item.note}
                           </p>
                         )}
                       </div>
@@ -971,8 +931,8 @@ export default function Detail() {
           ...editingTimelineItem,
           symbol: data.symbol,
           type: editingTimelineItem.action || data.direction,
-          motive: editingTimelineItem.motive || { posTag: '', tags: [], desc: '' },
-          plan: editingTimelineItem.plan || { tp: '', sl: '', desc: '' }
+          note: editingTimelineItem.note || '',
+          note_tags: editingTimelineItem.note_tags || []
         } : null}
         onSave={handleTimelineSave}
       />
