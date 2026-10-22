@@ -37,7 +37,7 @@ export default function TradeImportDrawer({ isOpen, onClose, onImported, embedde
     code: asset.code || undefined,
     market: asset.market,
     asset_class: asset.asset_class,
-    currency: asset.currency,
+    currency: asset.currency || defaultCurrencyForMarket(asset.market) || inferMarketCurrency(asset.code || asset.name).currency,
   })) : rows;
 
   if (!isOpen) return null;
@@ -49,7 +49,7 @@ export default function TradeImportDrawer({ isOpen, onClose, onImported, embedde
     setRows(current => [...current, {
       time: '', type: '', symbol: asset?.name || '', code: asset?.code || undefined,
       market: asset?.market || 'GLOBAL', asset_class: asset?.asset_class || 'Stock',
-      currency: asset?.currency || '', price: 0, qty: 0,
+      currency: asset?.currency || defaultCurrencyForMarket(asset?.market || '') || inferMarketCurrency(asset?.code || asset?.name || '').currency, price: 0, qty: 0,
     }]);
     setError(null); setNotice(null); setDuplicateMatches(null); setSourceHashes([]);
     setIdempotencyKey(newIdempotencyKey('trades'));

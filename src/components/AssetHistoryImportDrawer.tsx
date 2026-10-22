@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronRight, Loader2, Search, Upload, X } from 'lucide-react';
 import { apiRequest } from '../lib/api';
-import { defaultCurrencyForMarket, inferMarketCurrency, type InstrumentSearchResult } from '../lib/instruments';
+import { defaultCurrencyForMarket, inferMarketCurrency, normalizeMarketCode, type InstrumentSearchResult } from '../lib/instruments';
 import { formatTradeTimestamp } from '../lib/trade-time';
 import { notifyDailyReviewInputsChanged } from '../lib/daily-review';
 import TradeImportDrawer from './TradeImportDrawer';
@@ -92,7 +92,13 @@ export default function AssetHistoryImportDrawer({ open, onClose }: { open: bool
               <input value={query} onFocus={() => setSearchOpen(true)} onChange={event => { setQuery(event.target.value); setSearchOpen(true); }} onKeyDown={event => { if (event.key === 'Enter') useTypedInstrument(); if (event.key === 'Escape') setSearchOpen(false); }} placeholder="Search name or ticker, e.g. 紫金黄金国际" autoComplete="off" className="min-w-0 flex-1 bg-transparent text-[13px] font-semibold text-[#0B2545] outline-none placeholder:font-normal placeholder:text-slate-300" />
             </div>
             {searchOpen && query.trim() && <div className="mt-1 max-h-48 overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-sm">
-              {options.map(option => <button key={`${option.market}:${option.code}`} type="button" onMouseDown={event => event.preventDefault()} onClick={() => { setSelected(option); setQuery(option.name); setSearchOpen(false); }} className="flex w-full items-center justify-between border-b border-slate-100 px-3 py-2 text-left last:border-0 hover:bg-slate-50">
+              {options.map(option => <button key={`${option.market}:${option.code}`} type="button" onMouseDown={event => event.preventDefault()} onClick={() => {
+                const inferred = inferMarketCurrency(option.code || option.name);
+                const market = normalizeMarketCode(option.market, option.code || option.name);
+                setSelected({ ...option, market, currency: option.currency || defaultCurrencyForMarket(market) || inferred.currency });
+                setQuery(option.name);
+                setSearchOpen(false);
+              }} className="flex w-full items-center justify-between border-b border-slate-100 px-3 py-2 text-left last:border-0 hover:bg-slate-50">
                 <span className="truncate text-[12px] font-semibold text-[#0B2545]">{option.name}<span className="ml-1.5 font-mono text-[9px] text-slate-400">{option.market} · {option.asset_class}</span></span><span className="ml-3 shrink-0 font-mono text-[10px] text-slate-500">{option.code}</span>
               </button>)}
               {searching && <div className="flex items-center gap-1.5 px-3 py-2 text-[10px] text-slate-400"><Loader2 size={11} className="animate-spin" /> Searching…</div>}

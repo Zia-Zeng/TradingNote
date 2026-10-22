@@ -104,7 +104,7 @@ def _infer_market_currency(code: str, exchange: str = "", currency: str = "") ->
         # Hong Kong tickers are commonly four or five digits and retain a
         # leading zero (for example 02259). Do not misclassify them as global.
         market, default_currency = "HK", "HKD"
-    elif any(key in venue for key in ("NASDAQ", "NYSE", "AMEX", "ARCA", "US", "BATS", "NMS", "NGM", "NCM", "NYQ", "ASE")):
+    elif normalized.endswith((".N", ".O")) or any(key in venue for key in ("NASDAQ", "NYSE", "AMEX", "ARCA", "US", "BATS", "NMS", "NGM", "NCM", "NYQ", "NYS", "ASE")):
         market, default_currency = "US", "USD"
     elif "CRYPTO" in venue or "CRYPTO" in normalized or "-USD" in normalized:
         market, default_currency = "CRYPTO", "USD"
