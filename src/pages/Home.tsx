@@ -24,6 +24,45 @@ const formatPnl = (value: number, currency: string, compact = false) => {
   }
 };
 
+type MarketContributionGroup = {
+  market: string;
+  market_name: string;
+  currency: string;
+  winners: Array<{ name: string; code?: string | null; amount: number }>;
+  losers: Array<{ name: string; code?: string | null; amount: number }>;
+};
+
+function getMarketContributions(review: DailyReview): MarketContributionGroup[] {
+  const fromBrief = review.summary_brief?.contributions_by_market;
+  if (fromBrief?.length) return fromBrief;
+
+  // Older backend summaries saved exact per-security attribution in facts but
+  // did not expose market groups. Recover those rows so mixed-currency days
+  // still show the instruments instead of silently dropping all attribution.
+  const attribution = review.summary_facts?.portfolio_result?.attribution || [];
+  const amounts = review.summary_brief?.portfolio.amounts || [];
+  const marketNames: Record<string, string> = { CN: 'A股', HK: '港股', US: '美股', CRYPTO: '加密资产' };
+  const groups: MarketContributionGroup[] = [];
+  for (const total of amounts) {
+    const currencyRows = attribution.filter(row => row.currency === total.currency && Number.isFinite(row.pnl));
+    if (!currencyRows.length) continue;
+    const roundedTotal = Math.round(total.amount * 100) / 100;
+    const roundedAttribution = currencyRows.reduce((sum, row) => sum + Math.round(row.pnl * 100) / 100, 0);
+    if (Math.abs(roundedAttribution - roundedTotal) > 0.05) continue;
+    const marketKeys = [...new Set(currencyRows.map(row => (row.market || 'OTHER').toUpperCase()))];
+    for (const market of marketKeys) {
+      const rows = currencyRows.filter(row => (row.market || 'OTHER').toUpperCase() === market).map(row => ({
+        name: row.symbol || row.code || '未知证券', code: row.code,
+        amount: Math.round(row.pnl * 100) / 100,
+      }));
+      const winners = rows.filter(row => row.amount > 0).sort((a, b) => b.amount - a.amount).slice(0, 3);
+      const losers = rows.filter(row => row.amount < 0).sort((a, b) => a.amount - b.amount).slice(0, 3);
+      if (winners.length || losers.length) groups.push({ market, market_name: marketNames[market] || market, currency: total.currency, winners, losers });
+    }
+  }
+  return groups;
+}
+
 export default function Home() {
   const [searchParams, setSearchParams] = useSearchParams();
   const onboardParam = searchParams.get('onboard');
@@ -50,6 +89,7 @@ export default function Home() {
   const [overviewPnlError, setOverviewPnlError] = useState('');
   const [tradeReviewError, setTradeReviewError] = useState('');
   const pnlRequestRef = useRef(0);
+  const marketContributions = dailyReview ? getMarketContributions(dailyReview) : [];
 
   const { notes: attentionNotes, error: notesError, add: addNote, remove: removeNote } = useDailyNotes(selectedDate);
   const [newAttentionNote, setNewAttentionNote] = useState('');
@@ -480,10 +520,10 @@ export default function Home() {
                         </p>
                       )}
                     </section>
-                    {((dailyReview.summary_brief.contributions_by_market?.length ?? 0) > 0 || dailyReview.summary_brief.winners.length > 0 || dailyReview.summary_brief.losers.length > 0) && (
+                    {(marketContributions.length > 0 || dailyReview.summary_brief.winners.length > 0 || dailyReview.summary_brief.losers.length > 0) && (
                       <section>
                         <h3 className="mb-0.5 text-[11px] font-bold text-[#0B2545]">分市场标的盈亏贡献</h3>
-                        {dailyReview.summary_brief.contributions_by_market?.length ? dailyReview.summary_brief.contributions_by_market.map(group => (
+                        {marketContributions.length ? marketContributions.map(group => (
                           <div key={`${group.market}-${group.currency}`} className="text-[11px] leading-relaxed">
                             <p className="font-semibold text-slate-700">{group.market_name}（{group.currency}）</p>
                             {group.winners.length > 0 && <p className="text-emerald-700">正贡献：{group.winners.map(item => `${item.name} ${formatBriefAmount(item.amount, group.currency)}`).join('、')}</p>}
