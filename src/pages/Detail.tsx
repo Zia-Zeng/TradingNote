@@ -566,6 +566,10 @@ export default function Detail() {
   };
 
   const aiTracking = savedAssetTracking?.generatedBy === 'ai-tracking' ? savedAssetTracking : null;
+  const shortenedSavedTracking = aiTracking && [
+    aiTracking.overallSummary, aiTracking.pnlResult,
+    aiTracking.processResult, aiTracking.lessonsLearned
+  ].some(text => /(?:…|\.\.\.)\s*$/.test(text));
 
   useEffect(() => {
     if (scrollTo) {
@@ -874,6 +878,12 @@ export default function Detail() {
             <span className="flex-1">{trackingError}{savedAssetTracking ? ' Showing the last saved result.' : ''}</span>
             <button onClick={() => void generateTracking()} disabled={isGeneratingTracking || assetTrades.length === 0} className="shrink-0 font-bold underline disabled:opacity-60">Retry</button>
           </div>
+        )}
+
+        {shortenedSavedTracking && (
+          <p role="status" className="mb-3 rounded-lg bg-amber-50 px-2.5 py-2 text-[10px] text-amber-800">
+            This saved analysis was cut short by an earlier version. Select Regenerate to replace it with a complete result.
+          </p>
         )}
 
         <div className={cn("space-y-3 transition-opacity", isGeneratingTracking && "opacity-60")}>

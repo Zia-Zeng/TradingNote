@@ -1,8 +1,10 @@
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from app import main, market_data, news_data
 
@@ -56,6 +58,39 @@ class TrackingContextTests(unittest.TestCase):
         self.assertTrue(main._tracking_claims_missing_supplied_evidence(
             analysis, {"bars": [{"date": "2026-10-21", "close": 10.0}]}, [{"title": "Relevant news"}],
         ))
+
+    def test_tracking_keeps_a_complete_overlong_pnl_result_after_retry(self):
+        pnl = (
+            "Entered Aug 10 at 87.45 near the 86.87 close; added Sep 23 at 88.15 "
+            "after a bounce; Oct 22's 95.34 mark followed a rally from the Oct 2 "
+            "low of 82.10, leaving the open position above both entries."
+        )
+        content = json.dumps({
+            "overall_summary": "The position remains open.",
+            "pnl_analysis": pnl,
+            "process_evaluation": "The second entry followed a bounce.",
+            "lessons_learned": "Record the exit rule before the next entry.",
+        })
+        completion = SimpleNamespace(choices=[SimpleNamespace(
+            finish_reason="stop", message=SimpleNamespace(content=content),
+        )])
+        create = AsyncMock(side_effect=[completion, completion])
+        client = SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create)),
+            close=AsyncMock(),
+        )
+        request = main.TrackingAnalysisRequest(trade_context=main.TrackingTradeContext(
+            id="trade-1", symbol="Example", code="AAPL", market="US", direction="Buy",
+        ))
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}), \
+                patch.object(main, "cached_daily_history", new=AsyncMock(return_value={"bars": []})), \
+                patch.object(main, "fetch_market_news", new=AsyncMock(return_value=[])), \
+                patch.object(main, "AsyncOpenAI", return_value=client):
+            result = asyncio.run(main.analyze_tracking(request))
+
+        self.assertEqual(create.await_count, 2)
+        self.assertEqual(result.analysis.pnl_analysis, pnl)
+        self.assertEqual(result.tracking["pnlResult"], pnl)
 
     def test_a_share_default_tries_wind_before_baostock(self):
         calls = []

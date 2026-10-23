@@ -23,4 +23,4 @@ Example output:
 
 4. lessons_learned: Give actionable future guidance in this order: what specific behavior to repeat; what specific mistake and its root cause to avoid; one concrete rule, checkpoint, or habit for the next trade. Avoid generic advice. Maximum 40 words.
 
-Keep the combined response within 160 words. Do not repeat the same fact across fields. If the evidence is insufficient for a conclusion, identify what is missing instead of guessing.
+Keep the combined response within 160 words. End every field with a complete sentence; never use an ellipsis or leave a thought unfinished. Do not repeat the same fact across fields. If the evidence is insufficient for a conclusion, identify what is missing instead of guessing.

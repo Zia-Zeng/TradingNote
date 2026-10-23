@@ -438,7 +438,7 @@ class TrackingAnalysisResponse(BaseModel):
     tracking: dict[str, str]
 
 
-TRACKING_PROMPT_VERSION = "tracking-en-v7"
+TRACKING_PROMPT_VERSION = "tracking-en-v8"
 TRACKING_WORD_LIMITS = {
     "overall_summary": 50,
     "pnl_analysis": 30,
@@ -463,15 +463,18 @@ TRACKING_USER_PROMPT_PREFIX = (
 )
 
 
-def _enforce_tracking_word_limits(analysis: TrackingAnalysis) -> TrackingAnalysis:
-    bounded: dict[str, str] = {}
-    for field, limit in TRACKING_WORD_LIMITS.items():
-        words = getattr(analysis, field).split()
-        if len(words) > limit:
-            bounded[field] = " ".join(words[:limit]).rstrip(".,;:!?—-") + "…"
-        else:
-            bounded[field] = getattr(analysis, field).strip()
-    return TrackingAnalysis(**bounded)
+def _tracking_overlong_fields(analysis: TrackingAnalysis) -> list[str]:
+    return [
+        field for field, limit in TRACKING_WORD_LIMITS.items()
+        if len(getattr(analysis, field).split()) > limit
+    ]
+
+
+def _tracking_unfinished_fields(analysis: TrackingAnalysis) -> list[str]:
+    return [
+        field for field in TRACKING_WORD_LIMITS
+        if getattr(analysis, field).rstrip().endswith(("…", "..."))
+    ]
 
 
 def _tracking_claims_missing_supplied_evidence(
@@ -814,8 +817,13 @@ async def analyze_tracking(payload: TrackingAnalysisRequest) -> TrackingAnalysis
                 analysis = TrackingAnalysis.model_validate_json(content)
                 if _tracking_claims_missing_supplied_evidence(analysis, market_data, market_news):
                     raise ValueError("The response claimed supplied market evidence was unavailable.")
+                unfinished = _tracking_unfinished_fields(analysis)
+                overlong = _tracking_overlong_fields(analysis)
+                if unfinished or (overlong and attempt == 0):
+                    raise ValueError(f"Tracking fields need complete, concise sentences: {unfinished or overlong}.")
                 break
             except (ValidationError, ValueError) as exc:
+                analysis = None
                 validation_error = exc
                 if attempt == 0:
                     if content:
@@ -827,8 +835,9 @@ async def analyze_tracking(payload: TrackingAnalysisRequest) -> TrackingAnalysis
                             "Return a corrected JSON object only, with exactly four string fields named "
                             "overall_summary, pnl_analysis, process_evaluation, and lessons_learned. "
                             "Do not add a wrapper, markdown, or commentary. Follow the original evidence "
-                            "and word limits. Do not claim dated news or daily bars are unavailable when "
-                            "they are present in the supplied facts."
+                            "and word limits. End each field with a complete sentence, never an ellipsis. "
+                            "Do not claim dated news or daily bars are unavailable when they are present "
+                            "in the supplied facts."
                         ),
                     })
     except OpenAIError as exc:
@@ -849,8 +858,6 @@ async def analyze_tracking(payload: TrackingAnalysisRequest) -> TrackingAnalysis
             details,
         )
         raise HTTPException(status_code=502, detail="DeepSeek returned an invalid Tracking analysis after retry. Please retry.") from validation_error
-    analysis = _enforce_tracking_word_limits(analysis)
-
     market_summary = {key: value for key, value in market_data.items() if key != "bars"}
     return TrackingAnalysisResponse(
         trade_id=trade.id,
