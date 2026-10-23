@@ -21,9 +21,11 @@ from uuid import uuid4
 from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
 from openai import AsyncOpenAI, OpenAIError
 from pydantic import BaseModel, Field, ValidationError, model_validator
+from starlette.concurrency import run_in_threadpool
 
 from .market_data import fetch_daily_history
 from .daily_brief import build_daily_brief
+from .instrument_resolver import apply_resolved_instrument
 from .portfolio_engine import roll_portfolio
 from .summary_market import a_share_major_indices, csi_index_change, csi_industry_context, csi_sector_performance
 from .tavily_mcp import search_market_news
@@ -479,6 +481,9 @@ async def import_holding_snapshot(payload: HoldingsImportRequest) -> dict[str, A
     imported_at = datetime.now(timezone.utc).isoformat()
     rows = [row.model_dump(exclude_none=True) for row in payload.rows]
     warnings: list[str] = []
+    # Snapshot rows imported from statements often carry names without ticker
+    # codes; resolve them before valuation so every row is price-addressable.
+    await asyncio.gather(*(run_in_threadpool(apply_resolved_instrument, row) for row in rows))
     history_start = (date.fromisoformat(snapshot_date) - timedelta(days=14)).isoformat()
     semaphore = asyncio.Semaphore(5)
 
@@ -2844,7 +2849,7 @@ def _find_import_duplicates(rows: list[dict[str, Any]], existing: list[dict[str,
 @router.post("/import/trades/check")
 def check_trade_import_duplicates(payload: TradeImportRequest) -> dict[str, Any]:
     _ensure_today_storage()
-    rows = [item.model_dump(exclude_none=True) for item in payload.trades]
+    rows = [apply_resolved_instrument(item.model_dump(exclude_none=True)) for item in payload.trades]
     duplicates = _find_import_duplicates(rows, list_trades())
     duplicate_sources = _duplicate_source_hashes("trades", payload.source_hashes)
     return {"duplicates": duplicates, "duplicate_sources": duplicate_sources, "new_count": len(rows) - len(duplicates)}
@@ -2862,14 +2867,16 @@ def import_trades(payload: TradeImportRequest) -> dict[str, Any]:
     skipped_count = 0
     replaced_count = 0
     existing = list_trades()
+    # Resolve name-only rows once so duplicate detection and saving share the
+    # same ticker identity.
+    resolved = [apply_resolved_instrument(item.model_dump(exclude_none=True)) for item in payload.trades]
     if duplicate_hashes:
         if payload.duplicate_mode == "allow" or any(
-            not any(_has_same_trade_details(item.model_dump(exclude_none=True), previous) for previous in existing)
-            for item in payload.trades
+            not any(_has_same_trade_details(record, previous) for previous in existing)
+            for record in resolved
         ):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This source file was imported before. Only matching trades may be skipped or replaced; no duplicate records were created.")
-    for item in payload.trades:
-        record = item.model_dump(exclude_none=True)
+    for record in resolved:
         market = str(record.get("market") or "CN").upper()
         currency = str(record.get("currency") or {"CN": "CNY", "HK": "HKD", "US": "USD", "CRYPTO": "USD"}.get(market, "")).upper()
         if not currency:
@@ -3037,6 +3044,12 @@ Translate Chinese 买入 to Buy and 卖出 to Sell. Write every warning in conci
             if missing:
                 warnings.append(f"Row {index} needs review: {', '.join(missing)}. Complete the fields before saving.")
             trades.append(row)
+        # Attach ticker codes to name-only rows so the preview (and any later
+        # save) carries a price-history-ready identity.
+        await asyncio.gather(*(run_in_threadpool(apply_resolved_instrument, row) for row in trades))
+        for row in trades:
+            if not str(row.get("code") or "").strip() and str(row.get("symbol") or "").strip():
+                warnings.append(f"{row['symbol']}: no exact ticker match was found for this name. Add the code manually if you want price tracking.")
         if not trades and not warnings:
             warnings.append("No completed trade rows were found. Try another screenshot or enter the trades manually.")
         return OcrImportPreview(trades=trades, warnings=warnings)

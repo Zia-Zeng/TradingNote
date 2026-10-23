@@ -493,6 +493,8 @@ function AgentMarkdown({ text, reviewAsset }: { text: string; reviewAsset?: stri
   return <div className="w-[280px] max-w-full text-slate-700">{blocks}{note && reviewAsset && <ReviewNotesButton note={note} asset={reviewAsset} />}</div>;
 }
 
+type TickerCandidate = { code: string; name: string; market: string };
+
 type BacktestResult = {
   strategy: string;
   ticker: string;
@@ -603,6 +605,9 @@ export default function Agent() {
   const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
   const [backtestLoading, setBacktestLoading] = useState(false);
   const [backtestError, setBacktestError] = useState<string | null>(null);
+  const [tickerLookup, setTickerLookup] = useState<{ query: string; candidates: TickerCandidate[]; failed?: boolean } | null>(null);
+  const [tickerLookupLoading, setTickerLookupLoading] = useState(false);
+  const tickerLookupRequestRef = useRef(0);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -640,6 +645,14 @@ export default function Agent() {
     });
     return () => { active = false; };
   }, [tab, backtestStep, backtestStrategy, backtestTicker, backtestMonths]);
+
+  useEffect(() => {
+    if (tab !== 'backtest' || backtestStep !== '1') {
+      tickerLookupRequestRef.current += 1;
+      setTickerLookup(null);
+      setTickerLookupLoading(false);
+    }
+  }, [tab, backtestStep]);
 
   useEffect(() => {
     keepAtBottomRef.current = true;
@@ -682,12 +695,52 @@ export default function Agent() {
       if (btStep || showDetail) {
         const selectedStrat = STRATEGIES.find(s => s.id === strat);
         msgs.push({ id: 'bt_u1', role: 'user', content: `Let's test ${selectedStrat?.name || 'the strategy'}` });
-        msgs.push({ id: 'bt_a1', role: 'agent', content: "Great! Enter an A-share code or US ticker (e.g., 601899 or AAPL)." });
+        msgs.push({ id: 'bt_a1', role: 'agent', content: "Great! Enter an A-share code, a US ticker, or a stock name in Chinese or English (e.g., 601899, AAPL, or 京东方)." });
+      }
+
+      if (btStep === '1' && tickerLookup) {
+        msgs.push({ id: 'bt_u2', role: 'user', content: tickerLookup.query });
+        const lookupMsg = tickerLookupLoading ? (
+          <p className="text-[12px] leading-relaxed">Looking up "{tickerLookup.query}"…</p>
+        ) : tickerLookup.candidates.length > 0 ? (
+          <div className="w-[260px] max-w-full">
+            <p className="mb-2 text-[12px] leading-relaxed">I found these matches. Tap one to backtest it:</p>
+            <div className="space-y-1.5">
+              {tickerLookup.candidates.map(candidate => (
+                <button
+                  key={candidate.code}
+                  type="button"
+                  onClick={() => {
+                    tickerLookupRequestRef.current += 1;
+                    setTickerLookup(null);
+                    setTickerLookupLoading(false);
+                    setSearchParams({ tab: 'backtest', bt_step: '2', strategy: strat || 'sma', ticker: candidate.code, name: candidate.name });
+                  }}
+                  className="flex w-full items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-2.5 text-left shadow-sm active:bg-slate-50"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-[12px] font-bold text-[#0B2545]">{candidate.name}</span>
+                    <span className="block text-[10px] text-slate-500">{candidate.market === 'CN' ? 'A-share' : candidate.market === 'US' ? 'US stock' : candidate.market}</span>
+                  </span>
+                  <span className="shrink-0 font-mono text-[11px] font-bold text-[#EE6C4D]">{candidate.code}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <p role="alert" className="text-[12px] leading-relaxed text-rose-700">
+            {tickerLookup.failed
+              ? 'Could not look up that name. Please try again, or enter a code such as 601899 or AAPL.'
+              : `No A-share or US stock matched "${tickerLookup.query}". Try the full name, or enter a code such as 601899 or AAPL.`}
+          </p>
+        );
+        msgs.push({ id: 'bt_a2', role: 'agent', content: lookupMsg });
       }
 
       if (btStep === '2' || btStep === '3' || showDetail) {
-        msgs.push({ id: 'bt_u2', role: 'user', content: tick || '' });
-        
+        const tickerName = searchParams.get('name');
+        msgs.push({ id: 'bt_u2', role: 'user', content: tickerName ? `${tickerName} (${tick})` : (tick || '') });
+
         const configMsg = (
           <div className="w-[240px] max-w-full">
             <p className="mb-2 text-[12px] leading-relaxed">I've formulated your backtest configuration:</p>
@@ -695,7 +748,10 @@ export default function Agent() {
               <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">Strategy</div>
               <div className="text-[12px] font-bold text-[#0B2545] mb-2.5">{STRATEGIES.find(s => s.id === strat)?.name}</div>
               <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-0.5">Target Ticker</div>
-              <div className="text-[12px] font-bold text-[#0B2545] uppercase">{tick}</div>
+              <div className="text-[12px] font-bold text-[#0B2545]">
+                {tickerName && <span className="mr-1.5">{tickerName}</span>}
+                <span className="font-mono uppercase">{tick}</span>
+              </div>
             </div>
             {btStep === '2' ? (
               <div className="mb-2">
@@ -1087,7 +1143,7 @@ export default function Agent() {
         setMessages([]); // default state / landing for chat
       }
     }
-  }, [tradeId, action, step, tab, reference, searchParams, setSearchParams, backtestResult, backtestLoading, backtestError, backtestMonths, savedTask]);
+  }, [tradeId, action, step, tab, reference, searchParams, setSearchParams, backtestResult, backtestLoading, backtestError, backtestMonths, savedTask, tickerLookup, tickerLookupLoading]);
 
   useEffect(() => {
     if (action !== 'insights' || tab !== 'chat') return;
@@ -1341,13 +1397,29 @@ export default function Agent() {
     if (tab === 'backtest') {
       const btStep = searchParams.get('bt_step');
       if (btStep === '1') {
-        if (!/^(?:\d{6}(?:\.(?:SH|SZ|BJ))?|[A-Z][A-Z0-9.-]{0,15})$/i.test(currentInput)) {
-          setBacktestError('Enter an A-share code such as 601899 or a US ticker such as AAPL.');
-          setInput(currentInput);
+        if (/^(?:\d{6}(?:\.(?:SH|SZ|BJ))?|[A-Z][A-Z0-9.-]{0,15})$/i.test(currentInput)) {
+          setBacktestError(null);
+          setTickerLookup(null);
+          setSearchParams({ tab: 'backtest', bt_step: '2', strategy: searchParams.get('strategy') || 'sma', ticker: currentInput.toUpperCase() });
           return;
         }
+        const request = ++tickerLookupRequestRef.current;
         setBacktestError(null);
-        setSearchParams({ tab: 'backtest', bt_step: '2', strategy: searchParams.get('strategy') || 'sma', ticker: currentInput.toUpperCase() });
+        setTickerLookup({ query: currentInput, candidates: [] });
+        setTickerLookupLoading(true);
+        const query = new URLSearchParams({ q: currentInput });
+        void apiRequest<{ candidates: TickerCandidate[] }>(`/api/backtest/resolve?${query.toString()}`)
+          .then(result => {
+            if (tickerLookupRequestRef.current !== request) return;
+            setTickerLookup({ query: currentInput, candidates: result.candidates || [] });
+          })
+          .catch(() => {
+            if (tickerLookupRequestRef.current !== request) return;
+            setTickerLookup({ query: currentInput, candidates: [], failed: true });
+          })
+          .finally(() => {
+            if (tickerLookupRequestRef.current === request) setTickerLookupLoading(false);
+          });
         return;
       }
     }
@@ -1673,7 +1745,7 @@ export default function Agent() {
                   }
                 }}
                 placeholder={tab === 'backtest' && searchParams.get('bt_step') === '1'
-                  ? "Ticker (601899 or AAPL)..."
+                  ? "Ticker or name (601899, AAPL, or 京东方)..."
                   : action === 'review' && step === 'awaiting_asset'
                     ? "e.g. Zijin Mining or 601899"
                     : "Ask a master what they are buying..."}

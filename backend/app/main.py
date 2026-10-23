@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from openai import APIStatusError, APITimeoutError, AsyncOpenAI, OpenAIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from .cached_history import cached_daily_history
+from .instrument_resolver import apply_resolved_instrument
 from .market_data import fetch_daily_history
 from .feed import COVER_DIR, FEED_PROMPT_PATH, FeedPrompt, generate_daily_feed, get_feed_prompt
 from .news_data import fetch_market_news
@@ -575,7 +576,7 @@ def add_trade(payload: TradeRecord) -> dict[str, Any]:
         date.fromisoformat((payload.time or "")[:10])
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Trade date is required; time of day is optional.") from exc
-    trade = payload.model_dump(exclude_none=True, mode="json")
+    trade = apply_resolved_instrument(payload.model_dump(exclude_none=True, mode="json"))
     trade["id"] = payload.id or str(uuid4())
     try:
         return create_trade(trade)
@@ -595,7 +596,7 @@ def trade(trade_id: str) -> dict[str, Any]:
 
 @app.put("/api/trades/{trade_id}", response_model=TradeRecord)
 def replace_trade(trade_id: str, payload: TradeRecord) -> dict[str, Any]:
-    trade_data = payload.model_dump(exclude_none=True, mode="json")
+    trade_data = apply_resolved_instrument(payload.model_dump(exclude_none=True, mode="json"))
     trade_data["id"] = trade_id
     result = update_trade(trade_id, trade_data)
     if result is None:

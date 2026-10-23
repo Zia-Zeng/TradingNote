@@ -101,6 +101,17 @@ def initialize_storage() -> None:
                 payload TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS instrument_aliases (
+                symbol TEXT PRIMARY KEY,
+                code TEXT NOT NULL,
+                name TEXT NOT NULL,
+                market TEXT NOT NULL,
+                currency TEXT NOT NULL,
+                asset_class TEXT NOT NULL,
+                source TEXT NOT NULL,
+                resolved_at TEXT NOT NULL
+            );
             """
         )
         if "source" not in {row["name"] for row in connection.execute("PRAGMA table_info(asset_notes)")}:
@@ -108,6 +119,37 @@ def initialize_storage() -> None:
             connection.execute(
                 "UPDATE asset_notes SET source = 'ai_review' WHERE content LIKE 'Review Trades · %'"
             )
+
+
+def get_instrument_alias(symbol: str) -> dict[str, str] | None:
+    key = symbol.strip().casefold()
+    if not key:
+        return None
+    with database() as connection:
+        row = connection.execute(
+            "SELECT symbol, code, name, market, currency, asset_class, source FROM instrument_aliases WHERE symbol = ?",
+            (key,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def save_instrument_alias(resolved: dict[str, str]) -> dict[str, str]:
+    record = {
+        "symbol": str(resolved["symbol"]).strip().casefold(),
+        "code": str(resolved["code"]).strip(),
+        "name": str(resolved.get("name") or "").strip(),
+        "market": str(resolved.get("market") or "").strip().upper(),
+        "currency": str(resolved.get("currency") or "").strip().upper(),
+        "asset_class": str(resolved.get("asset_class") or "Stock").strip(),
+        "source": str(resolved.get("source") or "manual").strip(),
+    }
+    with database() as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO instrument_aliases (symbol, code, name, market, currency, asset_class, source, resolved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (record["symbol"], record["code"], record["name"], record["market"], record["currency"],
+             record["asset_class"], record["source"], datetime.now(timezone.utc).isoformat()),
+        )
+    return record
 
 
 def get_market_history_cache(market: str, code: str, start: str, end: str) -> dict[str, Any]:

@@ -6,6 +6,7 @@ import { cn } from '../lib/utils';
 import { apiRequest } from '../lib/api';
 import { currentLocalDate, hasTradeDate, tradeDateTimeFields } from '../lib/trade-time';
 import { defaultCurrencyForMarket, inferMarketCurrency, type InstrumentSearchResult } from '../lib/instruments';
+import EnglishDateInput from './EnglishDateInput';
 import TradeImportDrawer from './TradeImportDrawer';
 
 interface RecordDrawerProps {
@@ -264,10 +265,10 @@ export default function RecordDrawer({ isOpen, onClose, initialData, onSave, onS
                       </label>
                     </div>
                     <div className="mb-3 grid grid-cols-2 gap-2">
-                      <label className="block">
+                      <div>
                         <span className="mb-1 block text-[9px] font-bold uppercase tracking-wider text-slate-400">Trade date (required)</span>
-                        <input lang="en-US" type="date" required value={tradeDate} onChange={event => setTradeDate(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 font-mono text-[11px] text-[#0B2545] focus:border-[#EE6C4D] focus:outline-none" />
-                      </label>
+                        <EnglishDateInput label="Trade date" value={tradeDate} onChange={setTradeDate} />
+                      </div>
                       <label className="block">
                         <span className="mb-1 block text-[9px] font-bold uppercase tracking-wider text-slate-400">Trade time (optional)</span>
                         <input lang="en-US" type="time" value={tradeClock} onChange={event => setTradeClock(event.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-2 py-2 font-mono text-[11px] text-[#0B2545] focus:border-[#EE6C4D] focus:outline-none" />

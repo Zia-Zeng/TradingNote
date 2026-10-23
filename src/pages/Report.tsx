@@ -31,9 +31,12 @@ type Position = {
   quantity: number;
   costBasis: number;
   averageCost: number;
+  realizedPnl: number;
+  investedTotal: number;
   tradeCount: number;
   lastTradeDate: string;
   tab: string;
+  closed: boolean;
 };
 
 type DailyBar = { date: string; open?: number; high?: number; low?: number; close: number };
@@ -114,6 +117,17 @@ function LatestMarket({ history, loading }: { history?: DailyHistory; loading: b
 }
 
 function PositionPnl({ position, history, loading }: { position: Position; history?: DailyHistory; loading: boolean }) {
+  const formatPercent = (value: number | null) => value === null
+    ? '--'
+    : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
+  if (position.closed) {
+    const color = position.realizedPnl > 0 ? 'text-emerald-600' : position.realizedPnl < 0 ? 'text-rose-600' : 'text-slate-500';
+    const realizedPercent = position.investedTotal > 0 ? position.realizedPnl / position.investedTotal * 100 : null;
+    return <>
+      <div className="min-w-0"><p className="truncate text-[9px] text-slate-400">Realized PnL</p><p className={cn('truncate font-mono text-[10px] font-bold', color)}>{formatCurrencyAmount(position.realizedPnl, position.currency)}</p></div>
+      <div className="min-w-0"><p className="truncate text-[9px] text-slate-400">Realized PnL %</p><p className={cn('truncate font-mono text-[10px] font-bold', color)}>{formatPercent(realizedPercent)}</p></div>
+    </>;
+  }
   const bars = history?.bars || [];
   const awaitingFirstResult = loading && bars.length === 0;
   const latestClose = bars[bars.length - 1]?.close;
@@ -124,9 +138,6 @@ function PositionPnl({ position, history, loading }: { position: Position; histo
     ? (latestClose - position.averageCost) / position.averageCost * 100
     : null;
   const color = pnlValue === null ? 'text-slate-400' : pnlValue > 0 ? 'text-emerald-600' : pnlValue < 0 ? 'text-rose-600' : 'text-slate-500';
-  const formatPercent = (value: number | null) => value === null
-    ? '--'
-    : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
 
   return <>
     <div className="min-w-0"><p className="truncate text-[9px] text-slate-400">PNL Value</p><p className={cn('truncate font-mono text-[10px] font-bold', color)}>{awaitingFirstResult ? '--' : formatCurrencyAmount(pnlValue ?? undefined, position.currency)}</p></div>
@@ -172,17 +183,22 @@ function positionsFromTrades(trades: TradeRecord[]): Position[] {
       quantity: 0,
       costBasis: 0,
       averageCost: 0,
+      realizedPnl: 0,
+      investedTotal: 0,
       tradeCount: 0,
       lastTradeDate: '',
       tab: positionTab(trade.asset_class || 'Stock'),
+      closed: false,
     };
 
     if (trade.type === 'Buy') {
       position.costBasis += price * quantity;
       position.quantity += quantity;
+      position.investedTotal += price * quantity;
     } else {
       // A sale removes cost at the existing average cost, not at the sale price.
       const sold = Math.min(quantity, position.quantity);
+      position.realizedPnl += (price - position.averageCost) * sold;
       position.costBasis -= position.averageCost * sold;
       position.quantity -= sold;
     }
@@ -191,7 +207,7 @@ function positionsFromTrades(trades: TradeRecord[]): Position[] {
       position.quantity = 0;
       position.costBasis = 0;
     }
-    position.averageCost = position.quantity > 0 ? position.costBasis / position.quantity : 0;
+    position.averageCost = position.quantity > 0 ? position.costBasis / position.quantity : (position.averageCost || 0);
     position.name = trade.symbol || position.name;
     position.code = trade.code?.trim() || position.code;
     position.market = normalizeMarketCode(trade.market, trade.code || trade.symbol);
@@ -200,12 +216,12 @@ function positionsFromTrades(trades: TradeRecord[]): Position[] {
     position.tab = positionTab(position.assetClass);
     position.tradeCount += 1;
     position.lastTradeDate = tradeTimestamp(trade).slice(0, 10);
+    position.closed = position.quantity <= 0;
     positions.set(key, position);
   }
 
   return [...positions.values()]
-    .filter(position => position.quantity > 0)
-    .sort((a, b) => b.lastTradeDate.localeCompare(a.lastTradeDate) || a.name.localeCompare(b.name));
+    .sort((a, b) => Number(a.closed) - Number(b.closed) || b.lastTradeDate.localeCompare(a.lastTradeDate) || a.name.localeCompare(b.name));
 }
 
 const formatQuantity = (value: number) => value.toLocaleString('en-US', { maximumFractionDigits: 8 });
@@ -240,8 +256,10 @@ export default function Report() {
   }, [reloadToken]);
 
   const positions = useMemo(() => positionsFromTrades(trades), [trades]);
+  const openPositions = useMemo(() => positions.filter(position => !position.closed), [positions]);
+  const closedCount = positions.length - openPositions.length;
   useEffect(() => {
-    if (!positions.length) {
+    if (!openPositions.length) {
       setMarketByKey({});
       setMarketLoadingByKey({});
       return;
@@ -251,13 +269,13 @@ export default function Report() {
     const start = new Date(end);
     start.setDate(start.getDate() - 35);
     const dates = { start_date: localDate(start), end_date: localDate(end) };
-    const cachedByKey = new Map(positions.map(position => [position.key, readMarketCache(position)] as const));
-    setMarketByKey(Object.fromEntries(positions.flatMap(position => {
+    const cachedByKey = new Map(openPositions.map(position => [position.key, readMarketCache(position)] as const));
+    setMarketByKey(Object.fromEntries(openPositions.flatMap(position => {
       const cached = cachedByKey.get(position.key);
       return cached ? [[position.key, cached.data]] : [];
     })));
-    setMarketLoadingByKey(Object.fromEntries(positions.map(position => [position.key, !cachedByKey.get(position.key)])));
-    for (const position of positions) {
+    setMarketLoadingByKey(Object.fromEntries(openPositions.map(position => [position.key, !cachedByKey.get(position.key)])));
+    for (const position of openPositions) {
       const cached = cachedByKey.get(position.key);
       if (cached?.endDate === dates.end_date) continue;
       if (cached) setMarketLoadingByKey(current => ({ ...current, [position.key]: true }));
@@ -305,7 +323,12 @@ export default function Report() {
       </div>
 
       <div className="px-2.5 py-3 space-y-2 min-h-[100px]">
-        {!loading && !error && <p className="px-1 pb-1 text-[11px] text-slate-500">{positions.length} open positions from saved trades</p>}
+        {!loading && !error && (
+          <p className="px-1 pb-1 text-[11px] text-slate-500">
+            {openPositions.length} open position{openPositions.length === 1 ? '' : 's'}
+            {closedCount > 0 ? ` · ${closedCount} closed` : ''} from saved trades
+          </p>
+        )}
         {loading && <div className="rounded-xl bg-white p-5 text-center text-[12px] text-slate-500">Loading positions...</div>}
         {error && (
           <div className="rounded-xl border border-rose-100 bg-white p-4 text-[12px] text-rose-600">
@@ -318,21 +341,29 @@ export default function Report() {
             key={position.key}
             type="button"
             onClick={() => navigate(`/detail/${encodeURIComponent(position.code || position.name)}`, { state: { from: `${location.pathname}${location.search}` } })}
-            className="w-full rounded-xl border border-slate-100 bg-white p-3 text-left shadow-[0_4px_12px_rgba(11,37,69,0.04)] transition-transform active:scale-[0.99]"
+            className={cn(
+              'w-full rounded-xl border bg-white p-3 text-left shadow-[0_4px_12px_rgba(11,37,69,0.04)] transition-transform active:scale-[0.99]',
+              position.closed ? 'border-slate-200 bg-slate-50/60' : 'border-slate-100',
+            )}
           >
             <div className="flex items-start justify-between gap-1.5">
               <div className="min-w-0">
                 <div className="flex items-baseline gap-1.5">
-                  <span className="truncate text-[14px] font-bold text-[#0B2545]">{position.name}</span>
+                  <span className={cn('truncate text-[14px] font-bold', position.closed ? 'text-slate-500' : 'text-[#0B2545]')}>{position.name}</span>
                   {position.code && <span className="shrink-0 font-mono text-[10px] text-slate-500">{position.code}</span>}
                 </div>
-                <span className="mt-1 inline-block rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[9px] font-semibold text-slate-600">{position.assetClass}</span>
+                <div className="mt-1 flex flex-wrap items-center gap-1">
+                  <span className="inline-block rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[9px] font-semibold text-slate-600">{position.assetClass}</span>
+                  {position.closed && <span className="inline-block rounded border border-slate-300 bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-500">Closed · fully sold</span>}
+                </div>
               </div>
-              <LatestMarket history={marketByKey[position.key]} loading={Boolean(marketLoadingByKey[position.key])} />
+              {position.closed ? (
+                <span className="shrink-0 rounded-md border border-slate-200 bg-white px-2 py-1 text-[9px] font-bold text-slate-400">No live price</span>
+              ) : <LatestMarket history={marketByKey[position.key]} loading={Boolean(marketLoadingByKey[position.key])} />}
             </div>
             <div className="mt-3 grid grid-cols-4 gap-2 border-t border-slate-100 pt-2">
-              <div><p className="text-[9px] text-slate-400">Held quantity</p><p className="font-mono text-[12px] font-bold text-[#0B2545]">{formatQuantity(position.quantity)}</p></div>
-              <div><p className="text-[9px] text-slate-400">Average cost</p><p className="font-mono text-[11px] font-bold text-[#0B2545]">{formatCurrencyAmount(position.averageCost, position.currency)}</p></div>
+              <div><p className="text-[9px] text-slate-400">Held quantity</p><p className={cn('font-mono text-[12px] font-bold', position.closed ? 'text-slate-400' : 'text-[#0B2545]')}>{formatQuantity(position.quantity)}</p></div>
+              <div><p className="text-[9px] text-slate-400">{position.closed ? 'Last avg cost' : 'Average cost'}</p><p className={cn('font-mono text-[11px] font-bold', position.closed ? 'text-slate-400' : 'text-[#0B2545]')}>{formatCurrencyAmount(position.averageCost, position.currency)}</p></div>
               <PositionPnl position={position} history={marketByKey[position.key]} loading={Boolean(marketLoadingByKey[position.key])} />
             </div>
             <p className="mt-2 text-[10px] text-slate-400">{position.tradeCount} trade{position.tradeCount === 1 ? '' : 's'} · Last trade {position.lastTradeDate}</p>

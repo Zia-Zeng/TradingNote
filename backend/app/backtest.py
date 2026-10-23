@@ -15,7 +15,7 @@ from typing import Literal
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 import httpx
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -249,6 +249,35 @@ async def _run_us_backtest(strategy: str, symbol: str, start: date, end: date, m
         raise HTTPException(status_code=502, detail="The US backtest worker is unavailable.") from exc
     result.update({"months": months, "cached": False, "chart_error": None})
     return result
+
+
+@router.get("/resolve")
+async def resolve_ticker(q: str = Query(min_length=1, max_length=40)) -> dict:
+    """Map a free-text instrument name to backtestable A-share or US tickers."""
+    query = q.strip()
+    normalized = query.upper()
+    if re.fullmatch(r"\d{6}(?:\.(?:SH|SZ|BJ|SS))?", normalized) or re.fullmatch(r"[A-Z][A-Z0-9.-]{0,15}", normalized):
+        return {"query": query, "candidates": []}
+    from .stocks import search_stocks
+    result = await search_stocks(q=query)
+    blocked_classes = {"index", "bond", "future", "option", "currency", "commodity", "crypto"}
+    candidates: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in result.get("items", []):
+        code = str(item.get("code", "")).strip().upper()
+        market = str(item.get("market", "")).strip().upper()
+        asset_class = str(item.get("asset_class", "")).strip().lower()
+        if not code or code in seen or asset_class in blocked_classes:
+            continue
+        is_cn = market == "CN" and re.fullmatch(r"\d{6}(?:\.(?:SH|SZ|BJ|SS))?", code) is not None
+        is_us = market == "US" and re.fullmatch(r"[A-Z][A-Z0-9.-]{0,15}", code) is not None
+        if not (is_cn or is_us):
+            continue
+        seen.add(code)
+        candidates.append({"code": code, "name": str(item.get("name", "")).strip(), "market": market})
+        if len(candidates) >= 6:
+            break
+    return {"query": query, "candidates": candidates}
 
 
 @router.post("/run")
