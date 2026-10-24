@@ -30,6 +30,7 @@ from .tavily_mcp import search_market_news
 from .stocks import router as stocks_router
 from .backtest import router as backtest_router
 from .behavior_insights import router as behavior_insights_router
+from .agent.router import dispatch_chat, initialize as initialize_agent, router as agent_router, shutdown as shutdown_agent
 from .storage import (
     DRAFT_PRESET_QUESTION,
     REVIEW_PRESET_QUESTION,
@@ -57,6 +58,7 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_storage()
+    initialize_agent()
     feed_task = asyncio.create_task(_daily_feed_schedule())
     try:
         yield
@@ -66,6 +68,7 @@ async def lifespan(_: FastAPI):
             await feed_task
         except asyncio.CancelledError:
             pass
+        await shutdown_agent()
 
 
 app = FastAPI(
@@ -98,6 +101,7 @@ app.include_router(today_router)
 app.include_router(stocks_router)
 app.include_router(backtest_router)
 app.include_router(behavior_insights_router)
+app.include_router(agent_router)
 
 MAX_HISTORY_MESSAGES = 12
 logger = logging.getLogger(__name__)
@@ -222,12 +226,16 @@ class AgentChatRequest(BaseModel):
     symbol: str | None = Field(default=None, max_length=80)
     pnl: str | None = Field(default=None, max_length=80)
     trade_context: TradeContext | None = None
+    client_msg_id: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 class AgentChatResponse(BaseModel):
     conversation_id: str
     reply: str
     created_at: str
+    run_id: str | None = None
+    engine: str | None = None
+    agent_status: str | None = None
 
 
 class AgentPromptResponse(BaseModel):
@@ -879,8 +887,13 @@ async def analyze_tracking(payload: TrackingAnalysisRequest) -> TrackingAnalysis
     )
 
 
-@app.post("/api/agent/chat", response_model=AgentChatResponse)
+@app.post("/api/agent/chat", response_model=AgentChatResponse, response_model_exclude_none=True)
 async def chat(payload: AgentChatRequest) -> AgentChatResponse:
+    result = await dispatch_chat(payload, _legacy_chat)
+    return result if isinstance(result, AgentChatResponse) else AgentChatResponse(**result)
+
+
+async def _legacy_chat(payload: AgentChatRequest) -> AgentChatResponse:
     api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
     if not api_key or api_key == "replace_with_your_deepseek_api_key":
         raise HTTPException(

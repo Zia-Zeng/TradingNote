@@ -617,6 +617,8 @@ export default function Agent() {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [loadingConversation, setLoadingConversation] = useState<string | null>(null);
   const chatSessionRef = useRef(0);
+  const chatRequestRef = useRef<{ session: number; input: string; body: string | null } | null>(null);
+  const chatInFlightRef = useRef<number | null>(null);
   const skipNextRouteSyncRef = useRef(false);
   
   const navigate = useNavigate();
@@ -657,6 +659,17 @@ export default function Agent() {
   useEffect(() => {
     keepAtBottomRef.current = true;
   }, [tab, backtestStep, backtestStrategy, backtestTicker, backtestMonths, searchParams.get('task_detail')]);
+
+  useEffect(() => {
+    // Preserve the session for internal review routing and history restoration.
+    if (skipNextRouteSyncRef.current) return;
+    chatSessionRef.current += 1;
+    chatRequestRef.current = null;
+    chatInFlightRef.current = null;
+    setConversationId(null);
+    setSendError(null);
+    setIsSending(false);
+  }, [searchParams]);
 
   useEffect(() => {
     if (skipNextRouteSyncRef.current) {
@@ -1182,9 +1195,16 @@ export default function Agent() {
   }, [messages]);
 
   const sendChatMessage = async (currentInput: string) => {
+    if (chatInFlightRef.current !== null) return;
     const userMsgId = `u_${Date.now()}`;
     const pendingId = `${userMsgId}_pending`;
     const session = chatSessionRef.current;
+    chatInFlightRef.current = session;
+    let request = chatRequestRef.current;
+    if (!request || request.session !== session || request.input !== currentInput) {
+      request = { session, input: currentInput, body: null };
+      chatRequestRef.current = request;
+    }
 
     setSendError(null);
     setIsSending(true);
@@ -1195,30 +1215,32 @@ export default function Agent() {
     ]);
 
     try {
-      let trade_context: AgentTradeContext | null = null;
-      if (tradeId) {
-        try {
-          const storedTrade = await apiRequest<AgentTradeContext>(`/api/trades/${encodeURIComponent(tradeId)}`);
-          if (storedTrade && (storedTrade.type === 'Buy' || storedTrade.type === 'Sell')) {
-            trade_context = {
-              id: storedTrade.id,
-              symbol: storedTrade.symbol,
-              type: storedTrade.type,
-              price: Number(storedTrade.price),
-              qty: Number(storedTrade.qty),
-              amount: storedTrade.amount,
-              note: storedTrade.note,
-              note_tags: storedTrade.note_tags,
-            };
+      if (request.body === null) {
+        let trade_context: AgentTradeContext | null = null;
+        if (tradeId) {
+          try {
+            const storedTrade = await apiRequest<AgentTradeContext>(`/api/trades/${encodeURIComponent(tradeId)}`);
+            if (storedTrade && (storedTrade.type === 'Buy' || storedTrade.type === 'Sell')) {
+              trade_context = {
+                id: storedTrade.id,
+                symbol: storedTrade.symbol,
+                type: storedTrade.type,
+                price: Number(storedTrade.price),
+                qty: Number(storedTrade.qty),
+                amount: storedTrade.amount,
+                note: storedTrade.note,
+                note_tags: storedTrade.note_tags,
+              };
+            }
+          } catch {
+            // A detail-page reference may not correspond to a persisted trade card.
           }
-        } catch {
-          // A detail-page reference may not correspond to a persisted trade card.
         }
-      }
+        if (session !== chatSessionRef.current) return;
 
-      const data = await apiRequest<{ conversation_id: string; reply: string }>('/api/agent/chat', {
-        method: 'POST',
-        body: JSON.stringify({
+        // Retries must reuse the entire body, including the original conversation_id.
+        request.body = JSON.stringify({
+          client_msg_id: crypto.randomUUID(),
           message: currentInput,
           conversation_id: conversationId,
           action: action ?? null,
@@ -1231,7 +1253,12 @@ export default function Agent() {
           symbol: searchParams.get('symbol'),
           pnl: searchParams.get('pnl'),
           trade_context,
-        }),
+        });
+      }
+      if (session !== chatSessionRef.current) return;
+      const data = await apiRequest<{ conversation_id: string; reply: string }>('/api/agent/chat', {
+        method: 'POST',
+        body: request.body,
       }).catch(error => {
         if (error instanceof Error && error.message.startsWith('Unable to connect to the backend')) {
           throw new Error("Unable to connect to the Agent backend. Check that it is running, then try again.");
@@ -1242,6 +1269,7 @@ export default function Agent() {
         throw new Error('Agent backend returned an unexpected response. Please try again.');
       }
       if (session !== chatSessionRef.current) return;
+      if (chatRequestRef.current === request) chatRequestRef.current = null;
 
       if (typeof data.conversation_id === 'string') {
         setConversationId(data.conversation_id);
@@ -1257,13 +1285,19 @@ export default function Agent() {
       setInput(prev => prev || currentInput);
       setSendError(err instanceof Error ? err.message : 'Failed to send message. Please try again.');
     } finally {
-      if (session === chatSessionRef.current) setIsSending(false);
+      if (session === chatSessionRef.current && chatInFlightRef.current === session) {
+        chatInFlightRef.current = null;
+        setIsSending(false);
+      }
     }
   };
 
   const runLandingPrompt = async (kind: 'today' | 'review' | 'insights') => {
+    if (chatInFlightRef.current !== null) return;
     const prompt = kind === 'today' ? TODAY_PRESET_QUESTION : kind === 'review' ? REVIEW_PRESET_QUESTION : INSIGHTS_PRESET_QUESTION;
     const session = ++chatSessionRef.current;
+    chatRequestRef.current = null;
+    chatInFlightRef.current = session;
     keepAtBottomRef.current = true;
     setConversationId(null);
     setSendError(null);
@@ -1305,12 +1339,17 @@ export default function Agent() {
       const detail = error instanceof Error ? error.message : 'Request failed. Please try again later.';
       setMessages([{ id: `preset_${session}_u`, role: 'user', content: prompt }, { id: `preset_${session}_error`, role: 'agent', content: <p role="alert" className="text-rose-600">{detail}</p> }]);
     } finally {
-      if (session === chatSessionRef.current) setIsSending(false);
+      if (session === chatSessionRef.current && chatInFlightRef.current === session) {
+        chatInFlightRef.current = null;
+        setIsSending(false);
+      }
     }
   };
 
   const handleNewChat = () => {
     chatSessionRef.current += 1;
+    chatRequestRef.current = null;
+    chatInFlightRef.current = null;
     setMessages([]);
     setInput('');
     setConversationId(null);
@@ -1339,6 +1378,8 @@ export default function Agent() {
     try {
       const history = await apiRequest<ConversationHistory>(`/api/agent/conversations/${encodeURIComponent(id)}`);
       chatSessionRef.current += 1;
+      chatRequestRef.current = null;
+      chatInFlightRef.current = null;
       setIsSending(false);
       setInput('');
       setConversationId(history.conversation_id);
@@ -1374,7 +1415,7 @@ export default function Agent() {
   };
 
   const handleSend = () => {
-    if (!input.trim() || isSending) return;
+    if (!input.trim() || isSending || chatInFlightRef.current !== null) return;
     keepAtBottomRef.current = true;
     
     const currentInput = input.trim();
@@ -1494,6 +1535,9 @@ export default function Agent() {
   const handleAction = (act: string) => {
     if (act === 'review' || act === 'insights' || act === 'draft') {
       chatSessionRef.current += 1;
+      chatRequestRef.current = null;
+      chatInFlightRef.current = null;
+      setIsSending(false);
       setConversationId(null);
     }
     if (act === 'review') {
@@ -1734,6 +1778,9 @@ export default function Agent() {
                 ref={inputRef}
                 value={input}
                 onChange={(e) => {
+                  if (chatRequestRef.current && e.target.value.trim() !== chatRequestRef.current.input) {
+                    chatRequestRef.current = null;
+                  }
                   setInput(e.target.value);
                   e.currentTarget.style.height = '36px';
                   e.currentTarget.style.height = `${Math.min(e.currentTarget.scrollHeight, 160)}px`;
