@@ -421,6 +421,30 @@ def create_asset_note(asset_key: str, content: str, source: str = "manual") -> d
     return note
 
 
+def create_review_note_once(asset_key: str, content: str) -> dict[str, str]:
+    """A retry after a lost response must not create a second AI review note."""
+    with database() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        existing = connection.execute(
+            "SELECT id, asset_key, content, created_at, source FROM asset_notes WHERE asset_key = ? AND content = ? AND source = 'ai_review' LIMIT 1",
+            (asset_key, content),
+        ).fetchone()
+        if existing:
+            return dict(existing)
+        note = {
+            "id": str(uuid4()),
+            "asset_key": asset_key,
+            "content": content,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "source": "ai_review",
+        }
+        connection.execute(
+            "INSERT INTO asset_notes (id, asset_key, content, created_at, source) VALUES (?, ?, ?, ?, ?)",
+            (note["id"], asset_key, content, note["created_at"], note["source"]),
+        )
+    return note
+
+
 def update_asset_note(note_id: str, asset_key: str, content: str, source: str = "manual") -> dict[str, str] | None:
     with database() as connection:
         cursor = connection.execute(

@@ -301,9 +301,6 @@ function suggestionNote(text: string): string | null {
   return ['Review Trades · Suggestions', introduction, ...entries].filter(Boolean).join('\n\n');
 }
 
-const reviewAssetKey = (value: string) => value.normalize('NFKC').trim().toUpperCase()
-  .replace(/\.(SH|SZ|BJ)$/, '').replace(/[\s._-]+/g, '');
-
 function ReviewNotesButton({ note, asset }: { note: string; asset: string }) {
   const navigate = useNavigate();
   const [saving, setSaving] = useState(false);
@@ -316,23 +313,20 @@ function ReviewNotesButton({ note, asset }: { note: string; asset: string }) {
     setError(null);
     try {
       if (note.length > 2000) throw new Error('The combined suggestion exceeds the 2,000-character note limit.');
-      const trades = await apiRequest<Array<{ symbol: string; code?: string | null }>>('/api/trades');
-      const query = reviewAssetKey(asset);
-      const exact = trades.find(trade => [trade.symbol, trade.code].some(value => value && reviewAssetKey(value) === query));
-      const partial = trades.find(trade => [trade.symbol, trade.code].some(value => value && query.length >= 3 && (reviewAssetKey(value).includes(query) || query.includes(reviewAssetKey(value)))));
-      const trade = exact || partial;
-      if (!trade) throw new Error('No saved trades match this asset. Check the asset name or code.');
-      const code = trade.code?.trim();
-      const assetKey = code ? `code:${code}` : `symbol:${trade.symbol.trim().toUpperCase()}`;
-      const queryString = new URLSearchParams({ asset_key: assetKey });
-      const existing = await apiRequest<Array<{ content: string; source: string }>>(`/api/asset-notes?${queryString}`);
-      if (!existing.some(item => item.content === note && item.source === 'ai_review')) {
-        await apiRequest('/api/asset-notes', {
-          method: 'POST',
-          body: JSON.stringify({ asset_key: assetKey, content: note, source: 'ai_review' }),
-        });
+      let saved: { route: string } | null = null;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          saved = await apiRequest<{ route: string }>('/api/agent/review-note', {
+            method: 'POST',
+            body: JSON.stringify({ asset, content: note }),
+          });
+          break;
+        } catch (cause) {
+          if (!(cause instanceof Error) || !/^(HTTP 50[234]|Could not reach the API)/.test(cause.message) || attempt === 2) throw cause;
+          await new Promise(resolve => window.setTimeout(resolve, 350 * (attempt + 1)));
+        }
       }
-      setSavedRoute(code || trade.symbol.trim());
+      if (saved) setSavedRoute(saved.route);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not save the suggestion. Please retry.');
     } finally {

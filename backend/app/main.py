@@ -34,6 +34,7 @@ from .storage import (
     DRAFT_PRESET_QUESTION,
     REVIEW_PRESET_QUESTION,
     create_asset_note,
+    create_review_note_once,
     delete_asset_note,
     get_conversation,
     get_recent_model_messages,
@@ -209,6 +210,23 @@ class AssetNote(BaseModel):
     content: str
     created_at: str
     source: Literal["manual", "ai_review"]
+
+
+class ReviewNoteCreate(BaseModel):
+    asset: str = Field(min_length=1, max_length=120)
+    content: str = Field(min_length=1, max_length=2000)
+
+    @field_validator("asset", "content")
+    @classmethod
+    def strip_nonblank(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Value cannot be blank.")
+        return normalized
+
+
+class ReviewNoteSaved(AssetNote):
+    route: str
 
 
 class AgentChatRequest(BaseModel):
@@ -556,6 +574,19 @@ def asset_notes(asset_key: str = Query(min_length=1, max_length=120)) -> list[di
 @app.post("/api/asset-notes", response_model=AssetNote, status_code=status.HTTP_201_CREATED)
 def add_asset_note(payload: AssetNoteCreate) -> dict[str, str]:
     return create_asset_note(payload.asset_key, payload.content, payload.source)
+
+
+@app.post("/api/agent/review-note", response_model=ReviewNoteSaved, status_code=status.HTTP_201_CREATED)
+def add_review_note(payload: ReviewNoteCreate) -> dict[str, str]:
+    matches = _matching_review_trades(payload.asset)
+    if not matches:
+        raise HTTPException(status_code=404, detail="No saved trades match this asset. Check the asset name or code.")
+    trade = matches[0]
+    code = str(trade.get("code") or "").strip()
+    symbol = str(trade.get("symbol") or "").strip()
+    route = code or symbol
+    asset_key = f"code:{code}" if code else f"symbol:{symbol.upper()}"
+    return {**create_review_note_once(asset_key, payload.content), "route": route}
 
 
 @app.put("/api/asset-notes/{note_id}", response_model=AssetNote)

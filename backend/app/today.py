@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -19,6 +20,7 @@ from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
+import httpx
 from openai import AsyncOpenAI, OpenAIError
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from starlette.concurrency import run_in_threadpool
@@ -36,7 +38,7 @@ from .storage import create_trade, database, get_market_history_cache, list_trad
 router = APIRouter(prefix="/api/today", tags=["today"])
 logger = logging.getLogger(__name__)
 
-PORTFOLIO_ENGINE_VERSION = 10
+PORTFOLIO_ENGINE_VERSION = 11
 PORTFOLIO_ACTIVE_CACHE_SECONDS = 300
 
 
@@ -1214,6 +1216,36 @@ def _add_base_currency_pnl(days: list[dict[str, Any]], fx_bars: dict[str, list[d
         day["fx_conversion_complete"] = complete
 
 
+async def _portfolio_fx_history(currency: str, start: str, end: date) -> list[dict[str, Any]]:
+    """Use Yahoo FX closes, then public historical rates when Yahoo is throttled."""
+    try:
+        response = await fetch_daily_history(f"{currency}CNY=X", "GLOBAL", start, end)
+        bars = response.get("bars", [])
+        if bars:
+            return bars
+    except Exception as exc:
+        logger.info("Yahoo %s/CNY exchange history unavailable: %s", currency, str(exc)[:240])
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(
+            "https://api.frankfurter.dev/v2/rates",
+            params={"from": start, "to": end.isoformat(), "base": currency, "quotes": "CNY"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+    if not isinstance(payload, list):
+        raise ValueError("Historical FX response is not a list")
+    bars = []
+    for row in payload:
+        if not isinstance(row, dict) or row.get("base") != currency or row.get("quote") != "CNY":
+            continue
+        day, rate = row.get("date"), row.get("rate")
+        if not isinstance(day, str) or not isinstance(rate, (int, float)) or not math.isfinite(rate) or rate <= 0:
+            continue
+        bars.append({"date": day, "close": float(rate)})
+    return bars
+
+
 def _cached_portfolio_response(
     rows: list[Any], source_fingerprint: str, start_date: date, end_date: date,
 ) -> dict[str, Any] | None:
@@ -1402,8 +1434,7 @@ async def get_portfolio_pnl(
 
     async def load_fx(currency: str) -> tuple[str, list[dict[str, Any]]]:
         try:
-            response = await fetch_daily_history(f"{currency}CNY=X", "GLOBAL", history_start, end_date)
-            return currency, response.get("bars", [])
+            return currency, await _portfolio_fx_history(currency, history_start, end_date)
         except Exception as exc:
             logger.warning("Unable to fetch %s to CNY exchange history: %s", currency, str(exc)[:240])
             return currency, []

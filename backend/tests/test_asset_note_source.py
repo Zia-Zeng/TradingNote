@@ -7,11 +7,30 @@ from unittest.mock import patch
 
 from pydantic import ValidationError
 
-from app import storage
+from app import main, storage
 from app.main import AssetNoteCreate
 
 
 class AssetNoteSourceTests(unittest.TestCase):
+    def test_review_suggestion_is_one_note_even_when_save_is_retried(self):
+        content = "Review Trades · Suggestions\n\n" + "\n\n".join(
+            f"Future scenario: {index}\nSignal: signal {index}\nResponse plan: plan {index}"
+            for index in range(1, 5)
+        )
+        with tempfile.TemporaryDirectory(dir=storage.DATABASE_PATH.parent) as directory, \
+                patch.object(storage, "DATABASE_PATH", Path(directory) / "notes.sqlite3"), \
+                patch.object(main, "list_trades", return_value=[{"type": "Buy", "symbol": "京东方A", "code": "000725"}]):
+            storage.initialize_storage()
+            payload = main.ReviewNoteCreate(asset="京东方A", content=content)
+            first = main.add_review_note(payload)
+            retry = main.add_review_note(payload)
+            notes = storage.list_asset_notes("code:000725")
+            self.assertEqual(first["id"], retry["id"])
+            self.assertEqual(first["route"], "000725")
+            self.assertEqual(len(notes), 1)
+            self.assertEqual(notes[0]["content"], content)
+            self.assertEqual(notes[0]["content"].count("Future scenario:"), 4)
+
     def test_ai_review_can_be_one_long_note_while_manual_limit_stays_140(self):
         content = "Future scenario\nSignal\nResponse plan\n\n" * 12
         with self.assertRaises(ValidationError):
