@@ -75,12 +75,14 @@ async def _model(messages: list[dict], tools: list[dict], *, tool_choice: str, d
 
 
 def _evidence_reply(book: evidence.EvidenceBook) -> str:
-    lines = ["模型暂时不可用，以下是本轮已取得的证据摘要（未经分析）："]
-    lines += [f"{evidence.TOOL_LABELS.get(item['tool'], item['tool'])} [{ref}]：{item['summary']}" for ref, item in book.envelopes.items()]
+    lines = ["The AI model is temporarily unavailable, so this reply only lists the evidence gathered in this turn, "
+             "without analysis. Please try again in a moment for a full review."]
+    # Tool summaries are model-facing internal text, so only labels and sources are shown here.
+    lines += [f"{evidence.TOOL_LABELS.get(item['tool'], item['tool'])} [{ref}]" for ref, item in book.envelopes.items()]
     user_notes = [(ref, note) for ref, note in book.notes.items() if note.get("author") == "user"][:5]
     if user_notes:
-        lines.append("你记录的笔记：")
-        lines += [f"[{ref}] {note.get('date') or '日期未知'}：{' '.join(str(note.get('text') or '').split())[:200]}" for ref, note in user_notes]
+        lines.append("Notes you recorded (original wording):")
+        lines += [f"[{ref}] {note.get('date') or 'date unknown'}: {' '.join(str(note.get('text') or '').split())[:200]}" for ref, note in user_notes]
     return "\n\n".join(lines)
 
 

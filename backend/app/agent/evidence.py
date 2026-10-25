@@ -91,13 +91,14 @@ class EvidenceBook:
     def add(self, spec: Any, result: dict) -> dict:
         evidence_id = f"E{len(self.envelopes) + 1}"
         data = {key: value for key, value in result.items() if key not in {"summary", "truncated"}}
-        if spec.kind == "notes" and isinstance(data.get("notes"), list):
-            data["notes"] = [self._note(note, full=spec.name == "get_trade_dossier") for note in data["notes"]]
+        full_notes = spec.name in {"get_trade_dossier", "get_daily_context"}
+        if (spec.kind == "notes" or full_notes) and isinstance(data.get("notes"), list):
+            data["notes"] = [self._note(note, full=full_notes) for note in data["notes"]]
         envelope = {"evidence_id": evidence_id, "tool": spec.name, "ok": True, "source": spec.source(result),
                     "as_of": result.get("as_of"), "is_realtime": False,
                     "privacy": "private" if spec.privacy == "private_local" else "public",
                     "truncated": bool(result.get("truncated")), "summary": result.get("summary", ""), "data": data}
-        _fit(envelope, preserve_notes=spec.name == "get_trade_dossier")
+        _fit(envelope, preserve_notes=full_notes)
         self.envelopes[evidence_id] = envelope
         return envelope
 
@@ -122,14 +123,14 @@ class EvidenceBook:
 
 
 CITATION = re.compile(r"[\[【]\s*([EN]\d+(?:\s*[,，、]\s*[EN]\d+)*)\s*[\]】]")
-LEGEND_MARKER = "\n\n### 引用来源\n"
+LEGEND_MARKER = "\n\n### Sources\n"
 TOOL_LABELS = {
-    "get_trade_dossier": "交易档案", "search_notes": "笔记检索", "resolve_instrument": "标的识别",
-    "search_trades": "成交记录", "get_trade_stats": "交易统计", "get_behavior_facts": "行为事实",
-    "get_portfolio": "持仓概览", "get_daily_context": "当日记录", "get_price_history": "日线行情",
-    "get_index_snapshot": "指数概况", "search_news": "新闻检索",
+    "get_trade_dossier": "Trade dossier", "search_notes": "Note search", "resolve_instrument": "Instrument lookup",
+    "search_trades": "Trade records", "get_trade_stats": "Trade stats", "get_behavior_facts": "Behavior facts",
+    "get_portfolio": "Portfolio overview", "get_daily_context": "Daily record", "get_price_history": "Daily prices",
+    "get_index_snapshot": "Index snapshot", "search_news": "News search",
 }
-NOTE_LABELS = {"trade_note": "交易笔记", "asset_note": "标的笔记", "daily_note": "当日日记"}
+NOTE_LABELS = {"trade_note": "trade note", "asset_note": "asset note", "daily_note": "daily journal"}
 
 
 def refs_in(group: str) -> list[str]:
@@ -143,8 +144,8 @@ def citations(text: str) -> list[str]:
 def _legend_line(ref: str, book: EvidenceBook) -> str:
     if ref in book.notes:
         note = book.notes[ref]
-        owner = f"你记录的{NOTE_LABELS.get(note.get('kind'), '笔记')}" if note.get("author") == "user" else "之前保存的AI复盘"
-        parts = [owner, note.get("date") or "日期未知"]
+        owner = f"Your {NOTE_LABELS.get(note.get('kind'), 'note')}" if note.get("author") == "user" else "Previous AI review"
+        parts = [owner, note.get("date") or "date unknown"]
         if note.get("asset_key"):
             parts.append(str(note["asset_key"]).rsplit(":", 1)[-1])
         return f"[{ref}] " + " · ".join(parts)
@@ -152,7 +153,7 @@ def _legend_line(ref: str, book: EvidenceBook) -> str:
     parts = [TOOL_LABELS.get(envelope["tool"], envelope["tool"]), envelope["source"]]
     period = envelope["data"].get("period") if isinstance(envelope.get("data"), dict) else None
     if envelope.get("as_of"):
-        parts.append(f"截至 {envelope['as_of']}")
+        parts.append(f"as of {envelope['as_of']}")
     elif isinstance(period, dict) and period.get("start"):
         parts.append(f"{period['start']}~{period.get('end')}")
     return f"[{ref}] " + " · ".join(parts)

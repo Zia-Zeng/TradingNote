@@ -24,9 +24,9 @@ class GoldenEvalTests(unittest.TestCase):
         cls.report = asyncio.run(ae.run_suite())
         cls.by_id = {row["case_id"]: row for row in cls.report["results"]}
 
-    def test_thirty_unique_cases_and_note_coverage(self):
-        self.assertEqual(len(ae.CASES), 30)
-        self.assertEqual(len({item.id for item in ae.CASES}), 30)
+    def test_thirty_five_unique_cases_and_note_coverage(self):
+        self.assertEqual(len(ae.CASES), 35)
+        self.assertEqual(len({item.id for item in ae.CASES}), 35)
         self.assertGreaterEqual(sum(item.note_required for item in ae.CASES), 12)
         for item in ae.CASES:
             with self.subTest(case=item.id):
@@ -42,7 +42,7 @@ class GoldenEvalTests(unittest.TestCase):
                         self.assertLessEqual(set(values), {"code", "market", "date_from", "date_to"})
 
     def test_all_scripted_cases_run_with_honest_metrics(self):
-        self.assertEqual(len(self.report["results"]), 30)
+        self.assertEqual(len(self.report["results"]), 35)
         self.assertFalse(self.report["live_model_completed"])
         self.assertIsNone(self.report["p2_acceptance"])
         for row in self.report["results"]:
@@ -59,13 +59,21 @@ class GoldenEvalTests(unittest.TestCase):
                 self.assertTrue(all(row["metrics"]["budget_checks"].values()))
                 self.assertTrue(row["metrics"]["number_report_available"])
         summary = self.report["summary"]["v2"]
-        self.assertEqual(summary["passed"], 30)
+        self.assertEqual(summary["passed"], 35)
         self.assertGreater(summary["numeric_total"], 0)
         self.assertEqual(summary["value_support_rate"], 1)
         self.assertEqual(summary["citation_rate"], 1)
         self.assertEqual(summary["note_original_use_rate"], 1)
         self.assertEqual(summary["note_n_citation_rate"], 1)
         self.assertIn("never LLM acceptance", self.report["limitations"][0])
+
+    def test_daily_context_provides_original_note_evidence_without_a_second_lookup(self):
+        row = self.by_id["14-daily-note"]
+        self.assertEqual([call["tool"] for call in row["tool_calls"]], ["get_daily_context"])
+        self.assertTrue(row["metrics"]["passed"], row)
+        self.assertTrue(row["metrics"]["note_original_used"])
+        self.assertTrue(row["metrics"]["note_n_cited"])
+        self.assertFalse(row["metrics"]["missing_tool_groups"])
 
     def test_prefetch_counts_and_public_cases_never_read_private_tools(self):
         first = self.by_id["01-buy-reason"]
@@ -86,7 +94,7 @@ class GoldenEvalTests(unittest.TestCase):
             self.assertTrue(any(not call["ok"] for call in row["tool_calls"]))
             self.assertGreater(row["metrics"]["tool_error_count"], 0)
         self.assertEqual(self.report["summary"]["v2"]["error_cases"], 2)
-        self.assertIn("没有可用日线", self.by_id["25-missing-bars"]["reply"])
+        self.assertIn("no daily bars", self.by_id["25-missing-bars"]["reply"])
 
     def test_repeatable_replies_and_metrics(self):
         report = asyncio.run(ae.run_suite(ae.CASES[:5]))
@@ -215,6 +223,25 @@ class RuleEvalTests(unittest.TestCase):
         self.assertFalse(wrong["passed"])
         absent = self.score("你记录的交易理由是支撑反弹[N1]。", item)
         self.assertIn("note_original_missing", absent["flags"])
+
+    def test_daily_evidence_still_requires_original_note_reference_and_daily_tool(self):
+        item = ae.CASES[13]
+        book = ae.evidence.EvidenceBook()
+        book.add(ae.registry.SPECS["get_daily_context"], {
+            "notes": [{"note_id": "daily:p2-day", "kind": "daily_note", "author": "user", "text": ae.DAILY_NOTE}],
+            "summary": "当日成交记录"})
+        calls = [{"tool": "get_daily_context", "ok": True, "kind": "tool"}]
+        reply = f"当日日记：“{ae.DAILY_NOTE}”[N1]。成交记录已经核对[E1]。"
+        self.assertTrue(ae.evaluate(item, reply, book, calls)["passed"])
+        for changed, used, flag in (
+            (reply.replace("[N1]", ""), calls, "note_reference_missing"),
+            (reply.replace(ae.DAILY_NOTE, "日记内容待补充。"), calls, "note_original_missing"),
+            (reply, [], "missing_required_tools"),
+        ):
+            with self.subTest(flag=flag):
+                result = ae.evaluate(item, changed, book, used)
+                self.assertFalse(result["passed"])
+                self.assertIn(flag, result["flags"])
 
     def test_ai_attribution_injection_compliance_and_fabricated_url(self):
         self.book.add(ae.registry.SPECS["search_notes"], {

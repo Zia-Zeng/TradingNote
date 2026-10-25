@@ -6,28 +6,71 @@ from . import evidence
 
 LEADING_CITATIONS = re.compile(r"(?:[ \t]*(?:\*\*|__)?[ \t]*" + evidence.CITATION.pattern + r"(?:\*\*|__)?)+")
 TERMINATORS = "。！？!?"
+SENTENCE_END = TERMINATORS + "."
 OPENING_QUOTES = "“‘「『（"
 CLOSING_QUOTES = "”’」』）"
-NEGATION = re.compile(r"[非不没无未]|\bnot\b|\bnon-?|n't", re.I)
+LIST_MARKER = re.compile(r"[ \t]*(?:[-*>][ \t]*)?(?:#{1,6}[ \t]*)?(?:\d{1,3}|[A-Za-z])")
+ABBREVIATION = re.compile(r"(?:(?i:\b(?:e\.g|i\.e|vs|approx|incl|mr|mrs|ms|dr))|(?<![A-Za-z])[A-Z])\Z")
+NEGATION = re.compile(r"[非不没无未]|\bnot\b|\bnon-?|n't|\bno\b|\bnever\b|\bwithout\b|\bcannot\b", re.I)
+MONTHS = r"(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept?|Oct|Nov|Dec)"
 MOTIVE_CLAIM = re.compile(
     r"你.{0,12}(买入|卖出|买|卖|加仓|减仓|建仓|清仓).{0,12}(因为|是因为|由于|原因是|理由是)|你记录的.{0,10}(理由|原因|动机|计划)"
-    r"|你的(理由|动机|原因)是|你当时(认为|觉得|担心|打算|计划|想|判断|看好|预期)")
-NO_RECORD = re.compile(r"(没有|未|没|无)(有)?.{0,4}(记录|写|笔记|提到|说明)|未找到|找不到")
-ADVICE = re.compile(r"建议|下次|今后|以后|不妨|可以考虑|记得|试着|如果你")
-AI_AS_USER = re.compile(r"你(自己)?(在[^，。]{0,8})?(记录|写|提到|认为|说|表示)|你的(笔记|记录|想法|观点|理由)")
-REALTIME = re.compile(r"实时|当前价|(?<![体实出表发呈兑再])现价|最新价|最新股价|目前股价|real-?time|live price", re.I)
-DATED = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,2}月\d{1,2}日|截至")
+    r"|你的(理由|动机|原因)是|你当时(认为|觉得|担心|打算|计划|想|判断|看好|预期)"
+    r"|(?i:\byou\s+(?:bought|sold|added|trimmed|exited|entered|closed|cut)\b[^.?!\n]{0,40}\b(?:because|since|due to)\b"
+    r"|\byour\s+(?:recorded\s+)?(?:reason|rationale|motive|motivation|thesis)s?\s+(?:was|were|is|for)\b"
+    r"|\bthe reasons?\s+(?:you|for your)\b"
+    r"|\byou\s+(?:were|felt)\s+(?:bullish|bearish|optimistic|confident|afraid|worried|fearful|greedy|anxious|nervous)\b"
+    r"|\byou\s+(?:thought|believed|expected|feared|worried|wanted|intended|hoped)\b)")
+NO_RECORD = re.compile(
+    r"(没有|未|没|无)(有)?.{0,4}(记录|写|笔记|提到|说明)|未找到|找不到"
+    r"|(?i:\b(?:no|not|never|didn't|did not|wasn't|was not|isn't|is not|without)\b[^.?!\n]{0,20}\b(?:record|recorded|note|notes|written|wrote|mention|mentioned|documented|reason)\b"
+    r"|\bcould(?:n't| not) find\b|\bnot found\b)")
+ADVICE = re.compile(
+    r"建议|下次|今后|以后|不妨|可以考虑|记得|试着|如果你"
+    r"|(?i:\bnext time\b|\bgoing forward\b|\bin the future\b|\bconsider\b|\btry to\b|\bremember to\b|\bif you\b|\byou (?:could|might|may want to)\b)")
+AI_AS_USER = re.compile(
+    r"你(自己)?(在[^，。]{0,8})?(记录|写|提到|认为|说|表示)|你的(笔记|记录|想法|观点|理由)"
+    r"|(?i:\byou\s+(?:yourself\s+)?(?:wrote|recorded|noted|said|mentioned|stated|thought|believed|argued|felt)\b"
+    r"|\byour\s+(?:own\s+)?(?:note|notes|record|records|view|views|opinion|thinking|idea|reason|reasons|assessment)\b)")
+REALTIME = re.compile(
+    r"实时|当前价|(?<![体实出表发呈兑再])现价|最新价|最新股价|目前股价|real-?time|live price"
+    r"|\b(?:current|latest|today's)\s+(?:stock\s+|share\s+|market\s+)?(?:price|quote)s?\b"
+    r"|\blive\s+(?:quotes?|market data)\b", re.I)
+DATED = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,2}月\d{1,2}日|截至|\bas of\b|\b" + MONTHS + r"\.?\s+\d{1,2}\b", re.I)
 COMPLIANCE = re.compile(
     r"建议(你)?(?:立即|马上|尽快|可以|考虑|适当|逐步|择机|继续){0,3}(买入|卖出|加仓|减仓|清仓|抄底|满仓|全仓|追涨|割肉)"
-    r"|稳赚|保证收益|(?<![确担])保本(?!金)|必涨|必跌|一定会(涨|跌)|肯定会(涨|跌)|目标价必达")
-NEWS_MISSING = re.compile(r"(没有|未|无法|未能|暂未)(检索到|找到|获取到?|查到|搜到|获得)[^，。！？,!?\n]{0,10}(新闻|报道|消息)|暂无(相关)?新闻")
-MARKET_MISSING = re.compile(r"(没有|未|无法|未能|暂未)(检索到|找到|获取到?|查到|搜到|获得)[^，。！？,!?\n实时]{0,10}(行情|价格|日线|股价)|暂无(相关)?(行情|价格|日线)")
+    r"|稳赚|保证收益|(?<![确担])保本(?!金)|必涨|必跌|一定会(涨|跌)|肯定会(涨|跌)|目标价必达"
+    r"|(?i:\b(?:I|we)\s+(?:would\s+|strongly\s+)?(?:recommend|suggest|advise)\s+(?:that\s+)?(?:you\s+)?(?:to\s+)?(?:\w+ly\s+|now\s+)?(?:buy|buying|sell|selling|short|shorting|load up|dump|go long|add(?:ing)? to)\b"
+    r"|\byou\s+should\s+(?:\w+ly\s+|now\s+|just\s+)?(?:buy|sell|short|add to|load up|dump|go all[- ]in|take profits?)\b"
+    r"|\bguaranteed\s+(?:returns?|profits?|gains?)\b"
+    r"|\bguarantees?\s+(?:you\s+)?(?:a\s+)?(?:returns?|profits?|gains?)\b"
+    r"|\brisk[- ]free\s+(?:returns?|profits?|trades?)\b"
+    r"|\bsure[- ](?:win|thing|bet)\b|\bcan'?t\s+lose\b"
+    r"|\b(?:will|is going to)\s+definitely\s+(?:rise|go up|fall|go down|rally|drop)\b"
+    r"|\bis\s+(?:bound|certain|sure)\s+to\s+(?:rise|go up|fall|drop|rally)\b)")
+NEWS_MISSING = re.compile(
+    r"(没有|未|无法|未能|暂未)(检索到|找到|获取到?|查到|搜到|获得)[^，。！？,!?\n]{0,10}(新闻|报道|消息)|暂无(相关)?新闻"
+    r"|(?i:\b(?:could(?:n't| not)|did(?:n't| not)|was unable to|unable to)\s+(?:find|retrieve|get|locate)\s+(?:any\s+)?(?:relevant\s+|recent\s+|related\s+)?(?:news|articles|reports|headlines)\b"
+    r"|\bno\s+(?:relevant\s+|recent\s+|related\s+)?(?:news|articles|reports|headlines)\s+(?:was\s+|were\s+)?(?:found|available|retrieved|returned)\b)")
+MARKET_MISSING = re.compile(
+    r"(没有|未|无法|未能|暂未)(检索到|找到|获取到?|查到|搜到|获得)[^，。！？,!?\n实时]{0,10}(行情|价格|日线|股价)|暂无(相关)?(行情|价格|日线)"
+    r"|(?i:\b(?:could(?:n't| not)|did(?:n't| not)|was unable to|unable to)\s+(?:find|retrieve|get|locate)\s+(?:any\s+)?(?:relevant\s+|recent\s+|related\s+)?(?:market data|price data|prices|daily bars|bars|quotes|price history)\b"
+    r"|\bno\s+(?:relevant\s+|recent\s+|related\s+)?(?:market data|price data|prices|daily bars|bars|quotes|price history)\s+(?:was\s+|were\s+)?(?:found|available|retrieved|returned)\b)")
 NUMBER = re.compile(r"(?<![A-Za-z0-9_.])[-+]?\d+(?:,\d{3})*(?:\.\d+)?")
 NUMBER_NOISE = re.compile(
     r"https?://\S+|\d{4}\s*[-/年]\s*\d{1,2}\s*[-/月]\s*\d{1,2}\s*日?"
     r"|\d{1,2}\s*月\s*\d{1,2}\s*日|(?<!\d)\d{1,2}\s*[-–—~至到]\s*\d{1,2}\s*月"
-    r"|\d{4}\s*年|\d{1,2}\s*月|\d{1,2}:\d{2}(?::\d{2})?")
-NUMBER_LABEL = re.compile(r"(?m)^\s*(?:#{1,6}\s+)?(?:[-*]\s+)?\d+(?:\.(?!\d)|[)）、])\s*|第\d+(?:笔|次|条|步)|(?:MA|ma)\s*\d+|\d+\s*(?:日|天)\s*均线")
+    r"|\d{4}\s*年|\d{1,2}\s*月|\d{1,2}:\d{2}(?::\d{2})?"
+    r"|\b" + MONTHS + r"\.?\s+\d{1,2}(?:st|nd|rd|th)?\b(?:,?\s*(?:19|20)\d{2}\b)?"
+    r"|\b\d{1,2}(?:st|nd|rd|th)?\s+" + MONTHS + r"\b(?:,?\s*(?:19|20)\d{2}\b)?"
+    r"|\b" + MONTHS + r"\s+(?:19|20)\d{2}\b"
+    r"|\b(?:in|since|during|by|early|late|mid|Q[1-4]|H[12]|FY)\s*-?\s*(?:19|20)\d{2}\b(?!\s*(?:shares|CNY|USD|HKD|yuan|dollars|%))", re.I)
+NUMBER_LABEL = re.compile(
+    r"(?m)^\s*(?:#{1,6}\s+)?(?:[-*]\s+)?\d+(?:\.(?!\d)|[)）、])\s*|第\d+(?:笔|次|条|步)|(?:MA|ma)\s*\d+|\d+\s*(?:日|天)\s*均线"
+    r"|(?i:\b\d+\s*-?\s*(?:day|week)\s+(?:moving\s+)?(?:average|MA|SMA|EMA)\b"
+    r"|\b\d+(?:st|nd|rd|th)\b"
+    r"|\b(?:past|last|previous|recent|over the past|over the last)\s+\d{1,2}\s+(?:days?|weeks?|months?|years?)\b"
+    r"|\b\d{1,2}-(?:month|week|year)\b)")
 TICKER_NUMBER = re.compile(r"\d{5,6}")
 VALUE_CONTEXT = re.compile(r"(?:成本|价格|价|盈亏|收益|金额|成交|数量|盈利|亏损|股数|[¥$￥]|CNY|HKD|USD|price|profit|loss|amount|shares)(?:为|是|约|共)?\s*[:：]?\s*$", re.I)
 VALUE_UNIT = re.compile(r"元|股|手|%|％|万|亿|点|dollars|shares|CNY|HKD|USD", re.I)
@@ -45,14 +88,14 @@ REPAIR_MESSAGES = {
     "uncited_numbers": "数字缺少对应来源：在同一句中引用确实包含这些数值的 [E#]，笔记中的预期或计划用 [N#]；不要引用不相关证据。",
     "note_quote_mismatch": "引号内的笔记不是引用来源中的逐字原文：保留真实原话及 [N#]，翻译放在引号外并标为译意。",
 }
-COMPLIANCE_NOTE = "（已删除一处具体买卖建议：TradingNote 不提供买卖推荐或收益保证。）"
+COMPLIANCE_NOTE = "(Removed a specific buy/sell recommendation: TradingNote doesn't give trade recommendations or return guarantees.)"
 FIX_NOTES = {
-    "uncited_motive": "（交易理由中缺少笔记出处的描述已省略，请以你记录的内容为准。）",
-    "ai_review_as_user": "（将之前保存的AI复盘误当作你本人记录的描述已省略。）",
-    "false_missing": "（说明：本轮实际取到了相关新闻或行情数据，请以引用来源中的证据为准。）",
+    "uncited_motive": "(Omitted a statement about your trade reasons that had no note source; please rely on your own notes.)",
+    "ai_review_as_user": "(Omitted a statement that presented a previous AI review as your own note.)",
+    "false_missing": "(Note: this turn did retrieve relevant news or market data; rely on the evidence in the cited sources.)",
 }
-NUMBERS_NOTE = "（部分数值未能对应到本轮工具证据，已省略；请以已核实的引用来源为准。）"
-QUOTE_NOTE = "（笔记引文未能逐字对应到原文，已省略；请以你保存的笔记原文为准。）"
+NUMBERS_NOTE = "(Some figures could not be matched to this turn's tool evidence and were omitted; rely on the verified cited sources.)"
+QUOTE_NOTE = "(A note quotation did not match your saved original word for word and was omitted; rely on your saved note.)"
 
 
 @dataclass(frozen=True)
@@ -61,19 +104,32 @@ class Issue:
     excerpt: str = ""
 
 
+def _sentence_dot(text: str, index: int) -> bool:
+    rest = text[index + 1:].lstrip("*_")
+    if rest and not rest[0].isspace() and rest[0] not in "[【":
+        return False
+    line = text[text.rfind("\n", 0, index) + 1:index]
+    return not LIST_MARKER.fullmatch(line) and not ABBREVIATION.search(text[max(0, index - 10):index])
+
+
 def _pieces(text: str) -> list[str]:
-    # Quoted note text often ends with "。”"; split after the closing quote, never inside the quote.
-    pieces, start, depth = [], 0, 0
+    pieces, start, depth, straight = [], 0, 0, False
     for index, char in enumerate(text):
-        if char in OPENING_QUOTES:
+        closing = False
+        if char == '"':
+            straight, closing = not straight, straight
+        elif char in OPENING_QUOTES:
             depth += 1
-        elif char in CLOSING_QUOTES:
-            depth = max(0, depth - 1)
+        elif char in CLOSING_QUOTES and not (char == "’" and text[index - 1:index].isalpha() and text[index + 1:index + 2].isalpha()):
+            depth, closing = max(0, depth - 1), True
         if char == "\n":
-            depth = 0
-        elif depth or index + 1 < len(text) and text[index + 1] in CLOSING_QUOTES:
+            depth, straight = 0, False
+        elif depth or straight or index + 1 < len(text) and text[index + 1] in CLOSING_QUOTES:
             continue
-        elif char not in TERMINATORS and not (char in CLOSING_QUOTES and index and text[index - 1] in TERMINATORS):
+        elif closing:
+            if not (index and text[index - 1] in SENTENCE_END):
+                continue
+        elif char not in TERMINATORS and not (char == "." and _sentence_dot(text, index)):
             continue
         pieces.append(text[start:index + 1])
         start = index + 1
@@ -86,7 +142,6 @@ def sentences(text: str) -> list[str]:
     merged: list[str] = []
     for piece in _pieces(text):
         match = LEADING_CITATIONS.match(piece)
-        # "…买入。[N1]" cites the sentence before the terminator.
         if merged and match and not merged[-1].endswith("\n"):
             merged[-1] += match.group(0)
             piece = piece[match.end():]
@@ -99,8 +154,13 @@ def _excerpt(sentence: str) -> str:
     return " ".join(sentence.split())[:80]
 
 
+def _negated(sentence: str, start: int) -> bool:
+    width = 16 if sentence[start:start + 1].isascii() else 6
+    return bool(NEGATION.search(sentence[max(0, start - width):start]))
+
+
 def _unnegated(pattern: re.Pattern, sentence: str) -> bool:
-    return any(not NEGATION.search(sentence[max(0, match.start() - 6):match.start()]) for match in pattern.finditer(sentence))
+    return any(not _negated(sentence, match.start()) for match in pattern.finditer(sentence))
 
 
 def _has_note(sentence: str) -> bool:
@@ -114,7 +174,10 @@ def _uncited_motive(parts: list[str], index: int) -> bool:
     plain = evidence.CITATION.sub("", sentence).strip()
     if plain.endswith(("？", "?")) or NO_RECORD.search(sentence) or ADVICE.search(sentence):
         return False
-    heading = re.fullmatch(r"你记录的(?:交易)?(?:理由|动机|计划)(?:（[^）]{0,20}）)?[：:]?", plain.strip("#* "))
+    heading = re.fullmatch(
+        r"你记录的(?:交易)?(?:理由|动机|计划)(?:（[^）]{0,20}）)?[：:]?"
+        r"|(?i:(?:your\s+)?(?:recorded\s+)?(?:trade\s+|buy\s+|sell\s+)?(?:reasons?|rationale|motives?|plans?)(?:\s*\([^)]{0,30}\))?\s*:?)",
+        plain.strip("#* "))
     if heading or plain.endswith(("：", ":")):
         return not (index + 1 < len(parts) and _has_note(parts[index + 1]))
     return True
@@ -125,7 +188,7 @@ def _ai_review_as_user(sentence: str, book: evidence.EvidenceBook) -> bool:
     for match in evidence.CITATION.finditer(sentence):
         refs = evidence.refs_in(match.group(1))
         if any(ref in book.notes and book.notes[ref].get("author") != "user" for ref in refs) \
-                and AI_AS_USER.search(sentence[start:match.start()]):
+                and _unnegated(AI_AS_USER, sentence[start:match.start()]):
             return True
         start = match.end()
     return False
@@ -171,6 +234,7 @@ def _number_checks(reply: str, book: evidence.EvidenceBook) -> list[dict]:
             value = float(raw.replace(",", ""))
             decimals = len(raw.split(".")[1]) if "." in raw else 0
             scales = [1.0] + ([0.01] if unit in {"%", "％"} else []) + ([1e4] if unit == "万" else []) + ([1e8] if unit == "亿" else [])
+
             def supported(values):
                 return any(_near(values, value * scale, 0.5 * 10 ** -decimals * scale + 1e-9) for scale in scales)
             checks.append({"raw": raw, "grounded": supported(known), "cited": supported(cited)})
@@ -245,6 +309,7 @@ def repair_prompt(issues: list[Issue]) -> str:
             continue
         lines.append(f"{number}. " + REPAIR_MESSAGES[code])
         lines += [f"   - 原句：“{excerpt}”" for excerpt in excerpts[:3]]
+    lines.append("保持原回答的语言：用户用英文提问就全文用英文回答；笔记原文保持原语言，译意放在引号外。")
     lines.append("请直接输出修改后的完整回答，不要调用工具，不要解释修改过程。")
     return "\n".join(lines)
 
@@ -260,14 +325,18 @@ def fix(reply: str, book: evidence.EvidenceBook) -> str:
     """Deterministic last resort when the repair turn is unavailable or still blocked."""
     latest = book.latest_market_date()
     price = f"截至{latest}的收盘价" if latest else "最近收盘价"
+    english_price = f"close as of {latest}" if latest else "latest daily close"
 
     def dated(sentence: str) -> str:
         def replace(match: re.Match) -> str:
-            if NEGATION.search(sentence[max(0, match.start() - 6):match.start()]):
+            if _negated(sentence, match.start()):
                 return match.group(0)
             word = match.group(0).lower()
-            return "最近日线" if word == "实时" else "latest daily" if word in {"real-time", "realtime"} \
-                else "latest daily close" if word == "live price" else price
+            if word == "实时":
+                return "最近日线"
+            if word in {"real-time", "realtime"}:
+                return "latest daily"
+            return english_price if match.group(0).isascii() else price
         return REALTIME.sub(replace, sentence)
 
     parts: list[str] = []

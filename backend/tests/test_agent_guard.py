@@ -162,6 +162,42 @@ class GuardCheckTests(unittest.TestCase):
         self.assertEqual(codes("你记录的交易理由是“达到目标后止盈离场。”[N1]。", book), ["note_quote_mismatch"])
         self.assertEqual(codes("你记录的交易理由是“Take profit at the planned target.”[N1]；译意：达到目标后止盈。", book), [])
 
+    def test_english_sentences_keep_lists_quotes_and_abbreviations_together(self):
+        text = '1. Price 4.5 CNY[E1]. You wrote “Cut it. Then wait.”[N1] Next, e.g. this one.'
+        self.assertEqual(guard.sentences(text), [
+            "1. Price 4.5 CNY[E1].",
+            ' You wrote “Cut it. Then wait.”[N1]',
+            " Next, e.g. this one.",
+        ])
+
+    def test_english_compliance_claims_respect_negation_and_journaling_advice(self):
+        book = evidence_book()
+        for reply in ("I recommend buying more 京东方A.", "You should sell now.",
+                      "This stock offers guaranteed returns.", "It will definitely rise."):
+            self.assertEqual(codes(reply, book), ["compliance"], reply)
+        for reply in ("There are no guaranteed returns.", "I wouldn't recommend buying on hindsight.",
+                      "I can't guarantee returns.", "Next time, consider writing down why you buy."):
+            self.assertEqual(codes(reply, book), [], reply)
+
+    def test_english_motives_need_notes_but_missing_records_do_not(self):
+        book = evidence_book()
+        self.assertEqual(codes("You bought because you expected a rebound.", book), ["uncited_motive"])
+        self.assertEqual(codes("There's no note saying you bought because of earnings.", book), [])
+        self.assertEqual(codes(f"Your recorded reason: “{USER_NOTE}”[N1]", book), [])
+
+    def test_english_realtime_and_ai_attribution_are_guarded(self):
+        book = evidence_book()
+        self.assertEqual(codes("The current price is 4.93 CNY[E2].", book), ["realtime_claim"])
+        fixed = guard.fix("The current price is 4.93 CNY[E2].", book)
+        self.assertEqual(fixed, "The close as of 2026-10-23 is 4.93 CNY[E2].")
+        self.assertEqual(guard.check(fixed, book), [])
+        self.assertEqual(codes("You wrote that the position was too heavy[N2].", book), ["ai_review_as_user"])
+        self.assertEqual(codes("A previous AI review, not your own note, said the position was too heavy[N2].", book), [])
+
+    def test_english_dates_and_moving_average_labels_are_not_values(self):
+        report = guard.number_report("On July 7, 2026 you bought near the 20-day moving average[N1].", evidence_book())
+        self.assertEqual(report["total"], 0)
+
 
 class GuardRepairAndFixTests(unittest.TestCase):
     def test_repair_prompt_lists_each_problem_once_with_excerpts(self):
@@ -207,14 +243,17 @@ class GuardRepairAndFixTests(unittest.TestCase):
 
 
 class LegendTests(unittest.TestCase):
-    def test_dossier_keeps_full_note_even_above_the_generic_envelope_limit(self):
+    def test_note_tools_keep_full_note_even_above_the_generic_envelope_limit(self):
         text = "这笔交易的理由。" * 4000 + "最后的退出条件。"
-        book = evidence.EvidenceBook()
-        envelope = book.add(registry.SPECS["get_trade_dossier"], {
-            "notes": [{"note_id": "trade:long", "author": "user", "kind": "trade_note", "text": text}], "summary": "完整笔记"})
-        self.assertEqual(envelope["data"]["notes"][0]["text"], text)
-        self.assertNotIn("text_truncated", envelope["data"]["notes"][0])
-        self.assertGreater(evidence.size(envelope), evidence.ENVELOPE_BYTES)
+        for tool in ("get_trade_dossier", "get_daily_context"):
+            with self.subTest(tool=tool):
+                book = evidence.EvidenceBook()
+                envelope = book.add(registry.SPECS[tool], {
+                    "notes": [{"note_id": "trade:long", "author": "user", "kind": "trade_note", "text": text}], "summary": "完整笔记"})
+                self.assertEqual(envelope["data"]["notes"][0]["text"], text)
+                self.assertEqual(envelope["data"]["notes"][0]["ref"], "N1")
+                self.assertNotIn("text_truncated", envelope["data"]["notes"][0])
+                self.assertGreater(evidence.size(envelope), evidence.ENVELOPE_BYTES)
 
     def test_legend_lists_cited_sources_in_first_use_order(self):
         book = evidence_book()
@@ -222,10 +261,10 @@ class LegendTests(unittest.TestCase):
         body, legend = reply.split(evidence.LEGEND_MARKER)
         self.assertTrue(body.endswith("无效[E9]。"))
         self.assertEqual(legend.strip().split("\n\n"), [
-            "[N1] 你记录的交易笔记 · 2026-07-07 · 000725",
-            "[N2] 之前保存的AI复盘 · 2026-10-23 · 000725",
-            "[E2] 日线行情 · BaoStock · 截至 2026-10-23",
-            "[E3] 新闻检索 · Tavily · 2026-10-17~2026-10-23",
+            "[N1] Your trade note · 2026-07-07 · 000725",
+            "[N2] Previous AI review · 2026-10-23 · 000725",
+            "[E2] Daily prices · BaoStock · as of 2026-10-23",
+            "[E3] News search · Tavily · 2026-10-17~2026-10-23",
         ])
 
     def test_reply_without_known_citations_is_unchanged(self):

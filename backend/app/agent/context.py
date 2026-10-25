@@ -15,10 +15,14 @@ HISTORY_MESSAGES = 6
 HISTORY_CHARS = 1200
 # Same intent vocabulary as the legacy chat route, so scope decisions match existing behavior.
 ACCOUNT_INTENT = re.compile(
-    r"我的|我最近|持仓|仓位|账户|组合|交易记录|成交|交易笔记|复盘|交易风格|交易怎么样|之前的交易|最近的交易|这笔交易|为什么.*买|为什么.*卖|买入|卖出|盈亏|亏损|成本|"
-    r"portfolio|holdings|my trades|my trading|trade history|trade notes|journal|why.*buy|why.*sell", re.I)
-MARKET_INTENT = re.compile(r"行情|股价|日线|收盘价|指数|市场|涨跌|走势|A股|港股|美股|market|quote|stock price|index|sector|news|宏观|新闻|消息|事件", re.I)
-MOTIVE = re.compile(r"为什么.{0,6}(买|卖|加仓|减仓|止损|止盈)|当时|计划|止损|止盈|情绪|理由|动机|冲动|纪律|心态|笔记|复盘|why|reason|plan|stop.?loss|emotion", re.I)
+    r"我的|我最近|持仓|仓位|账户|组合|交易记录|成交|笔记|日记|复盘|交易风格|交易怎么样|之前的交易|最近的交易|这笔交易|为什么.*买|为什么.*卖|买入|卖出|盈亏|亏损|成本|"
+    r"portfolio|holdings|my trades|my trading|trade history|trade notes|journal|why.*buy|why.*sell"
+    r"|\bmy\b|\bmine\b|\bI\s+(?:bought|sold|traded|held|hold|own|entered|exited|added|trimmed)\b|\bpositions?\b|\bclosed trades?\b"
+    r"|\bwin rate\b|\bp&l\b|\bpnl\b", re.I)
+MARKET_INTENT = re.compile(r"行情|股价|日线|收盘价|指数|市场|涨跌|走势|A股|港股|美股|market|quote|stock price|index|sector|news|宏观|新闻|消息|事件"
+                           r"|\bprices?\b|\bclos(?:e|ing)\b|\bchart\b|\bdaily\b|\btrend\b|\bheadlines?\b", re.I)
+MOTIVE = re.compile(r"为什么.{0,6}(买|卖|加仓|减仓|止损|止盈)|当时|计划|止损|止盈|情绪|理由|动机|冲动|纪律|心态|笔记|复盘|why|reason|plan|stop.?loss|emotion"
+                    r"|\bnotes?\b|habit|\bstyle\b|discipline|mistake|lesson|improve|review|psycholog|mindset|impuls|fomo|thesis|rationale", re.I)
 EXPLICIT_TICKER = re.compile(r"(?<![A-Za-z0-9])(?:\d{5,6}|[A-Z]{2,5})(?![A-Za-z0-9])")
 SCOPE_RULES = {
     "private": "可以使用账户、成交、笔记工具和公开行情/新闻工具。私有数据只在 TradingNote 内使用；外部工具只能收到公开代码、市场和日期。",
@@ -83,7 +87,8 @@ class Context:
         results = [item for item in self.transcript if item["role"] == "tool"]
         for item in results:
             envelope = item["envelope"]
-            if envelope.get("ok") and "data" in envelope and registry.SPECS[envelope["tool"]].kind != "notes":
+            if (envelope.get("ok") and "data" in envelope and registry.SPECS[envelope["tool"]].kind != "notes"
+                    and not envelope["data"].get("notes")):
                 item["envelope"] = _compact(envelope)
                 if fits():
                     return

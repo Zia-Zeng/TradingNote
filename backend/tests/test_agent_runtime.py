@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from app import storage
 from app.agent import context, evidence, state
 from app.agent.runtime import ToolRuntime
-from app.agent.tools import registry
+from app.agent.tools import portfolio, registry
 from app.agent.types import ContextTooLarge, Limits, ModelTurn
 from app.main import AgentChatRequest
 
@@ -95,9 +95,13 @@ class ToolRuntimeTests(AgentDatabaseTestCase):
         async def scenario():
             runtime, _ = make_runtime("public")
             return [await runtime.call(tool_call(name, arguments)) for name, arguments in (
-                ("get_trade_dossier", {"trade_id": "t-buy"}), ("search_notes", {"query": "止损"}), ("get_portfolio", {}))]
+                ("get_trade_dossier", {"trade_id": "t-buy"}), ("search_notes", {"query": "止损"}), ("get_portfolio", {}),
+                ("get_daily_context", {"date": "2026-07-07"}))]
 
-        self.assertEqual([result["code"] for result in asyncio.run(scenario())], ["PRIVACY_BLOCKED"] * 3)
+        with patch.object(portfolio.today, "get_agent_daily_context") as daily, patch.object(portfolio.notes, "note_records") as records:
+            self.assertEqual([result["code"] for result in asyncio.run(scenario())], ["PRIVACY_BLOCKED"] * 4)
+        daily.assert_not_called()
+        records.assert_not_called()
 
     def test_public_daily_close_question_does_not_enter_private_scope(self):
         self.assertEqual(context.scope_of(ask("600999最近日线收盘价是多少？没有数据就说明。")), "public")
@@ -205,6 +209,80 @@ class ToolRuntimeTests(AgentDatabaseTestCase):
         self.assertEqual((note["ref"], note["attribution"], note["text"]), ("N1", "你记录的", NOTE))
         self.assertEqual(trace_rows()[0]["kind"], "prefetch")
 
+    def test_daily_context_numbers_original_notes_and_preserves_existing_fields(self):
+        day = "2026-07-07"
+        raw = {"trade_date": day, "summary": {"text": "原业务摘要", "facts": []},
+               "today_trades": [TRADES[0]], "record_coverage": {"complete": False},
+               "recent_notes": [{"trade_date": day, "text": "旧截取内容"}]}
+        records = [
+            {"note_id": "trade:t-buy", "kind": "trade_note", "author": "user", "date": day,
+             "asset_key": "CN:code:000725", "trade_ids": ["t-buy"], "text": NOTE},
+            {"note_id": "daily:day", "kind": "daily_note", "author": "user", "date": day,
+             "trade_ids": ["t-buy"], "text": "京东方A回踩企稳，观察计划的执行。"},
+            {"note_id": "asset:review", "kind": "asset_note", "author": "ai_review", "date": day,
+             "trade_ids": ["t-buy"], "text": "这轮执行仍需核对成交记录。"},
+            {"note_id": "daily:other", "kind": "daily_note", "author": "user", "date": "2026-07-08",
+             "trade_ids": [], "text": "另一天的日记。"},
+        ]
+
+        async def scenario():
+            runtime, book = make_runtime()
+            daily = await runtime.call(tool_call("get_daily_context", {"date": day}, "daily"))
+            dossier = await runtime.call(tool_call("get_trade_dossier", {"trade_id": "t-buy"}, "dossier"))
+            return book, daily, dossier
+
+        with patch.object(portfolio.today, "get_agent_daily_context", return_value=raw) as daily_handler, \
+                patch.object(portfolio.notes, "note_records", return_value=records):
+            book, daily, dossier = asyncio.run(scenario())
+        self.assertTrue(daily["ok"], daily)
+        self.assertTrue(dossier["ok"], dossier)
+        daily_handler.assert_called_once_with(day)
+        data = daily["data"]
+        for key in ("trade_date", "today_trades", "record_coverage", "recent_notes"):
+            self.assertEqual(data[key], raw[key])
+        self.assertEqual(data["daily_summary"], raw["summary"])
+        self.assertEqual(data["note_count"], 3)
+        self.assertEqual([note["ref"] for note in data["notes"]], ["N1", "N2", "N3"])
+        self.assertEqual([note["text"] for note in data["notes"]], [note["text"] for note in records[:3]])
+        self.assertEqual([note["attribution"] for note in data["notes"]],
+                         ["你记录的", "你记录的", "之前保存的AI复盘（不是用户观点）"])
+        repeated = next(note for note in dossier["data"]["notes"] if note["note_id"] == "trade:t-buy")
+        self.assertEqual(repeated["ref"], "N1")
+        self.assertEqual(len(book.notes), 3)
+        self.assertNotIn("daily:other", book.note_refs)
+        legend = evidence.legend("当日日记[N2]，之前的AI复盘[N3]。", book)
+        self.assertIn("[N2] Your daily journal · 2026-07-07", legend)
+        self.assertIn("[N3] Previous AI review · 2026-07-07", legend)
+
+    def test_daily_context_uses_canonical_dates_in_the_isolated_database(self):
+        day = "2026-07-07"
+        diary_text = "京东方A记录的观察条件。"
+        long_text = "之前的AI复盘原文。" * 2000 + "最后的退出条件。"
+        diary = portfolio.today.add_daily_note(portfolio.today.DailyNoteCreate(trade_date=day, text=diary_text))
+        other = portfolio.today.add_daily_note(portfolio.today.DailyNoteCreate(trade_date="2026-07-08", text="其他日期的日记。"))
+        review = storage.create_asset_note("CN:code:000725", long_text, source="ai_review")
+        with storage.database() as connection:
+            connection.execute("UPDATE asset_notes SET created_at=? WHERE id=?", (day + "T00:00:00+00:00", review["id"]))
+
+        async def scenario():
+            runtime, _ = make_runtime()
+            return await runtime.call(tool_call("get_daily_context", {"date": day}))
+
+        result = asyncio.run(scenario())
+        self.assertTrue(result["ok"], result)
+        records = {note["note_id"]: note for note in result["data"]["notes"]}
+        self.assertEqual(set(records), {"trade:t-buy", f"daily:{diary['id']}", f"asset:{review['id']}"})
+        self.assertEqual(records["trade:t-buy"]["text"], NOTE)
+        daily = records[f"daily:{diary['id']}"]
+        self.assertEqual((daily["date"], daily["text"], daily["author"]), (day, diary_text, "user"))
+        self.assertNotIn("text_truncated", daily)
+        ai_note = records[f"asset:{review['id']}"]
+        self.assertEqual((ai_note["author"], ai_note["text"]), ("ai_review", long_text))
+        self.assertNotIn("text_truncated", ai_note)
+        self.assertNotIn(f"daily:{other['id']}", records)
+        self.assertEqual(result["data"]["note_count"], 3)
+        self.assertGreater(evidence.size(result), evidence.ENVELOPE_BYTES)
+
     def test_trace_redacts_note_search_terms(self):
         async def scenario():
             runtime, _ = make_runtime()
@@ -229,6 +307,12 @@ class ContextTests(AgentDatabaseTestCase):
         }.items():
             self.assertEqual(context.scope_of(ask(message)), scope, message)
         self.assertEqual(context.scope_of(ask("京东方A行情", trade_id="t-buy")), "private")
+
+    def test_diary_and_note_requests_do_not_become_public_when_market_reads_are_declined(self):
+        for message in ("请读取2026-10-23的日记，不查行情或新闻。", "请引用当天笔记原文，不查询行情。"):
+            with self.subTest(message=message):
+                self.assertEqual(context.scope_of(ask(message)), "private")
+        self.assertEqual(context.scope_of(ask("600999最近日线收盘价是多少？没有数据就说明。")), "public")
 
     def test_private_context_prefetches_the_trade_dossier(self):
         async def scenario():
@@ -303,6 +387,24 @@ class ContextTests(AgentDatabaseTestCase):
         self.assertEqual(built.history, [])
         self.assertNotIn("trades", built.prefetched[0]["data"])
         self.assertEqual(built.prefetched[0]["data"]["notes"][0]["text"], NOTE)
+
+    def test_daily_original_notes_survive_compaction_and_still_obey_context_budget(self):
+        text = "当天的完整日记。" * 4000
+        book = evidence.EvidenceBook()
+        daily = book.add(registry.SPECS["get_daily_context"], {
+            "notes": [{"note_id": "daily:long", "kind": "daily_note", "author": "user", "text": text}],
+            "summary": "当日记录"})
+        built = context.Context("private", "header", [], [{"role": "user", "content": "旧问题" * 500}], "问题")
+        built.add_turn(ModelTurn(tool_calls=[tool_call("get_daily_context", {"date": "2026-07-07"}, "daily")]))
+        built.add_result("daily", daily)
+
+        with self.assertRaises(ContextTooLarge):
+            built.fit([], 10)
+        self.assertEqual(built.history, [])
+        retained = built.transcript[-1]["envelope"]
+        self.assertNotIn("compacted", retained)
+        self.assertEqual(retained["data"]["notes"][0]["text"], text)
+        self.assertEqual(retained["data"]["notes"][0]["ref"], "N1")
 
     def test_tool_turns_keep_reasoning_content_for_deepseek(self):
         built = context.Context("private", "header", [], [], "问题")

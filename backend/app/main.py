@@ -957,7 +957,12 @@ async def _legacy_chat(payload: AgentChatRequest) -> AgentChatResponse:
             + json.dumps(daily_context, ensure_ascii=False)
         )
     account_intent = bool(re.search(
-        r"我的|我最近|持仓|仓位|账户|组合|交易记录|成交|交易笔记|复盘|交易风格|交易怎么样|之前的交易|最近的交易|这笔交易|为什么.*买|为什么.*卖|买入|卖出|盈亏|亏损|成本|portfolio|holdings|my trades|my trading|trade history|trade notes|journal|why.*buy|why.*sell",
+        r"我的|我最近|持仓|仓位|账户|组合|交易记录|成交|交易笔记|复盘|交易风格|交易怎么样|之前的交易|最近的交易|这笔交易|为什么.*买|为什么.*卖|买入|卖出|盈亏|亏损|成本|portfolio|holdings|my trades|my trading|trade history|trade notes|journal|why.*buy|why.*sell"
+        r"|\b(?:did|do|does)\s+i\s+(?:buy|sell|trade|own|hold)\b"
+        r"|\bmy\b[^.?!]{0,60}\b(?:buy|bought|purchase|sell|sold|trade|trades|position|positions)\b"
+        r"|\b(?:what|which|how\s+much|how\s+many)\b[^.?!]{0,50}\b(?:price|quantity|shares|amount|cost)\b[^.?!]{0,50}\b(?:i|my|me)\b"
+        r"|\b(?:i|my)\b[^.?!]{0,50}\b(?:price|quantity|shares|amount|cost|p&l|pnl|profit|loss)\b"
+        r"|\bwin\s*rate\b|\bp&l\b|\bpnl\b",
         payload.message,
         re.IGNORECASE,
     ))

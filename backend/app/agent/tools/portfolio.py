@@ -87,5 +87,6 @@ def get_behavior_facts(as_of=None) -> dict:
 def get_daily_context(date: str) -> dict:
     day = notes._iso_date(date).isoformat()
     result = today.get_agent_daily_context(day)
-    return {**result, "daily_summary": result.get("summary"),
-            "summary": f"{day} 的现有日上下文，含 {len(result.get('today_trades', []))} 笔当日成交；原业务摘要保留在 daily_summary，覆盖范围及原函数截取边界以返回记录为准。"}
+    daily_notes = [note for note in notes.note_records() if note["date"] == day]
+    return {**result, "daily_summary": result.get("summary"), "notes": daily_notes, "note_count": len(daily_notes),
+            "summary": f"{day} 的现有日上下文，含 {len(result.get('today_trades', []))} 笔当日成交及 {len(daily_notes)} 条原文笔记；原业务摘要保留在 daily_summary，覆盖范围及原函数截取边界以返回记录为准。"}

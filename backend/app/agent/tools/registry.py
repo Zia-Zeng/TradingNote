@@ -159,7 +159,7 @@ class ToolSpec:
     def source(self, result: dict) -> str:
         if self.kind in {"market", "news"}:
             return str(result.get("source") or "Unknown source")
-        return "TradingNote 本地记录"
+        return "TradingNote local records"
 
 
 def _clean(schema: Any) -> Any:
