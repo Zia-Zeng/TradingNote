@@ -13,7 +13,7 @@
 
 ## 🌐 Try the deployed app
 
-**Public app:** [http://47.111.85.251/](http://47.111.85.251/) · **Application version:** [v2.0](https://github.com/Zia-Zeng/TradingNote/releases/tag/v2.0)
+**Official website:** [http://47.111.85.251/website/](http://47.111.85.251/website/) · **Public app:** [http://47.111.85.251/](http://47.111.85.251/) · **Application version:** [v2.0](https://github.com/Zia-Zeng/TradingNote/releases/tag/v2.0)
 
 The public app runs on an Alibaba Cloud server. Its frontend and `/api` requests share one origin through Nginx; FastAPI stores trades, notes, and conversations in a SQLite file on that server. This is **not** an Alibaba Cloud RDS instance. There is currently no sign-in or per-user isolation: visitors share the same records, so please use demonstration data only. The screenshots below illustrate the product; live results depend on available market and AI services.
 

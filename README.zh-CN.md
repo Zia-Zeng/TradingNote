@@ -13,7 +13,7 @@
 
 ## 🌐 在线体验
 
-**公网应用：**[http://47.111.85.251/](http://47.111.85.251/) · **应用版本：**[v2.0](https://github.com/Zia-Zeng/TradingNote/releases/tag/v2.0)
+**官网：**[http://47.111.85.251/website/](http://47.111.85.251/website/) · **公网应用：**[http://47.111.85.251/](http://47.111.85.251/) · **应用版本：**[v2.0](https://github.com/Zia-Zeng/TradingNote/releases/tag/v2.0)
 
 应用运行在阿里云服务器上。Nginx 同源提供前端并转发 `/api` 请求；FastAPI 将交易、笔记和会话保存在该服务器的 SQLite 文件中，**并未使用阿里云 RDS**。目前没有登录或按用户隔离，访问者共享同一份记录，请只录入演示数据。下方截图用于介绍功能；在线生成结果取决于行情和 AI 服务的可用性。
 
