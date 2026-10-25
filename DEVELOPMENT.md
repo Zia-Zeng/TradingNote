@@ -2,9 +2,27 @@
 
 For the product overview and quick start, see [English](README.md) or [简体中文](README.zh-CN.md).
 
-M-TradingNote is an AI-powered trading journal and review assistant designed to help individual investors make more disciplined decisions.
+TradingNote is a deployed, mobile-first trading journal built with React, TypeScript, Tailwind CSS, Vite, FastAPI, and SQLite. Screenshots in the READMEs are illustrative; the public application reads and writes through its backend API.
 
-A mobile trading journal prototype built with React, TypeScript, Tailwind CSS, and Vite. The screens use sample data.
+## Current production deployment (v2.0)
+
+- Public entry point: [http://47.111.85.251/](http://47.111.85.251/). Nginx on the Alibaba Cloud server serves the built frontend and proxies `/api` to FastAPI. The production frontend is built with `VITE_API_BASE_URL=/`; this value is embedded at build time. Do not replace it with a visitor-side `127.0.0.1` address.
+- The backend uses `backend/data/tradingnote.sqlite3` **on the server's disk**. This is SQLite hosted on a cloud server, not Alibaba Cloud RDS. The database and `backend/.env` are excluded from Git. Backups and recovery for the SQLite file must be handled separately from code deployment.
+- The public application currently has no login or per-user isolation. All visitors use the same server-side records; use demonstration data rather than private trading information.
+- Production historical-data preference is **A-shares: Wind → BaoStock; US stocks: Yahoo Finance → Wind; Hong Kong stocks: Yahoo Finance only**. The A-share order is configured with `MARKET_DATA_PROVIDER_ORDER=wind,baostock`; US and Hong Kong routing is implemented in `backend/app/market_data.py`. These are historical daily bars, not guaranteed real-time quotes.
+- DeepSeek, Tavily, and optional Wind/SuperMind credentials belong in the server-side environment. Never put secrets in `VITE_` variables, screenshots, documentation, or Git commits.
+
+### API map
+
+| Feature | Main endpoints | Source |
+| --- | --- | --- |
+| Trades and notes | `/api/trades`, `/api/asset-notes` | `backend/app/main.py`, `backend/app/storage.py` |
+| Today, imports, portfolio, daily review | `/api/today/*` | `backend/app/today.py` |
+| Agent chat, history, Review Trades notes | `/api/agent/chat`, `/api/agent/conversations`, `/api/agent/review-note` | `backend/app/main.py` |
+| Tracking and daily market history | `/api/tracking/analyze`, `/api/market/daily` | `backend/app/main.py`, `backend/app/market_data.py` |
+| Feed and backtests | `/api/feed`, `/api/backtest/run` | `backend/app/feed.py`, `backend/app/backtest.py` |
+
+The running FastAPI application's `/docs` page is the source of truth for request and response schemas. This map replaces the dated frontend/backend integration checklist; it describes implemented routes rather than pending work.
 
 ## Install as a Web App
 
@@ -17,17 +35,17 @@ npm ci
 npm run dev
 ```
 
-Open the URL printed by Vite to view the latest local prototype.
+Start the API as described below, then open the URL printed by Vite. For local development, the frontend defaults to `http://127.0.0.1:8000`; this is separate from the public deployment. Copy `.env.example` only when you need to set a different frontend API address.
 
-## Publish with GitHub Pages
+## GitHub Pages preview (separate from production)
 
 ```sh
 npm run build:pages
 ```
 
-The repository deploys the current `main` branch through GitHub Actions. Each push builds the demo and publishes it to GitHub Pages.
+The repository also has a GitHub Actions workflow that builds a static frontend and publishes it to GitHub Pages on each `main` push. **This is not the Alibaba Cloud production site or the evaluation entry point.** The current Pages workflow does not set `VITE_API_BASE_URL`, so API-backed features in that preview would point at the visitor's `127.0.0.1:8000`. A separately hosted, functional frontend needs a reachable HTTPS API URL and the corresponding backend origin configuration.
 
-The site is a static prototype and does not connect to a brokerage or trading API.
+The application does not connect to a brokerage or place trades.
 
 ### Agent Backtest
 
@@ -53,7 +71,7 @@ The Feed page requests `GET /api/feed`. The API finds a recent financial-market 
 
 Swagger UI (`/docs`) has a **Feed** section with `GET /api/feed` and `GET /api/feed/prompt`. Expand the prompt endpoint to read its purpose or call it to retrieve the current system prompt as JSON. The prompt is stored in `backend/app/prompts/feed_system.txt`; the API reads the file for each generation and prompt request, so edits take effect without restarting the backend.
 
-The scheduler runs inside the Agent API process. Keep that backend running for the midnight job, and configure both `TAVILY_API_KEY` and `DEEPSEEK_API_KEY` in `backend/.env`. GitHub Pages only hosts the static frontend, so a deployed Feed also needs a continuously running backend: set `VITE_API_BASE_URL` to its HTTPS API URL when building the frontend, and add the frontend origin to `FRONTEND_ORIGINS` on the backend. Without a reachable backend and those keys, Feed shows a setup message instead of generated articles.
+The scheduler runs inside the Agent API process. Keep that backend running for the midnight job, and configure both `TAVILY_API_KEY` and `DEEPSEEK_API_KEY` in the server's `backend/.env`. The Alibaba Cloud site uses its same-origin `/api` proxy. A separately hosted frontend, such as GitHub Pages, needs a reachable HTTPS API and an allowed `FRONTEND_ORIGINS` value. Without a reachable backend and those keys, Feed shows a setup message instead of generated articles.
 
 ## Run the local Agent API
 
@@ -80,7 +98,7 @@ The Agent page's **Review Trades** prompt is in `backend/app/prompts/review_trad
 
 The API calculates chart values, rather than accepting model-generated numbers. Allocation uses current valued holdings by currency and excludes cash. The bar chart shows each current position's unrealized P/L and return versus its recorded average cost; missing prices or costs remain unavailable. Green represents gains and red represents losses. Turnover is gross six-month trading value divided by the latest recorded account assets in the same currency, so it is approximate. No foreign-exchange conversion or invented six-month total return is applied. Import a holdings snapshot or dated trades before requesting Insights. A configured `DEEPSEEK_API_KEY` is required.
 
-Chat history is stored locally in `backend/data/tradingnote.sqlite3`, which is created automatically when the backend starts and is ignored by Git. The backend exposes `GET /api/agent/conversations` to list recent conversations and `GET /api/agent/conversations/{conversation_id}` to load one conversation. The model receives up to the latest 12 messages as context.
+Chat history is stored in `backend/data/tradingnote.sqlite3` on whichever host runs the backend. On the public site this is the Alibaba Cloud server, not the visitor's computer. The file is created automatically when the backend starts and is ignored by Git. The backend exposes `GET /api/agent/conversations` to list recent conversations and `GET /api/agent/conversations/{conversation_id}` to load one conversation. The model receives up to the latest 12 messages as context.
 
 Trade records can be persisted through `GET /api/trades`, `POST /api/trades`, `GET /api/trades/{trade_id}`, `PUT /api/trades/{trade_id}`, and `DELETE /api/trades/{trade_id}`. Each trade has one free-text `note` for its reason, intended next step, and any other observation, plus optional `note_tags`. Older saved `motive`, `plan`, and `notes` content is combined into the note when read; subsequent writes use the unified fields. New records may omit `id`; the backend returns a generated ID. The optional `date` field uses `YYYY-MM-DD`; Today writes the selected journal date so Tracking can align trades with daily bars. Existing records without a date remain readable, but their chart markers cannot be positioned on a specific day.
 
@@ -112,7 +130,7 @@ The Note section suggests tags for buy and sell trades and accepts custom string
 
 Today Daily Summary treats imported positions and trade records as the portfolio scope. It combines deterministic figures with one constrained DeepSeek narrative call; the model writes market, portfolio, and insight text only, while the application computes index moves, P&L amounts, and contribution rankings. Invalid or unavailable model output falls back to concise deterministic copy. For A-shares it uses the Shanghai Composite, Shenzhen Component, and ChiNext indices (CSI 300 fallback), plus exact-date sector performance and sectors associated with imported positions. The card presents market performance, imported-portfolio P&L, and reconciled contributor rows. It does not display return rate or account-scope caveats. `DAILY_SUMMARY_DEFAULT_MARKET` selects a broad index when no holdings or trades establish a market.
 
-`GET /api/market/history/{code}?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` returns historical daily bars for six-digit mainland China A-share codes. Providers are tried in the order in `MARKET_DATA_PROVIDER_ORDER`, which defaults to Wind Finmarket MCP, BaoStock, AkShare, then Yahoo Finance. Wind requires `WIND_MCP_BEARER_TOKEN`; when it is absent or a provider request fails, the next source is tried. The shared `fetch_daily_history` helper uses Yahoo Finance first and Wind second for US stocks, and Yahoo Finance for Hong Kong stocks; BaoStock only supplies A-share history. Successful responses include `source`, `providers_tried`, `provider_failures`, `frequency`, `adjustment`, `as_of`, `latest_close`, `is_realtime`, and `bars`. These integrations request unadjusted daily history, not real-time quotes.
+`GET /api/market/history/{code}?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD` returns historical daily bars for six-digit mainland China A-share codes. The production `MARKET_DATA_PROVIDER_ORDER` is `wind,baostock`; Wind requires `WIND_MCP_BEARER_TOKEN`, and BaoStock is tried when Wind is unavailable. If that environment variable is unset, the code's broader fallback order is Wind, BaoStock, AkShare, then Yahoo Finance; that is not the selected production order. The shared `fetch_daily_history` helper uses Yahoo Finance first and Wind second for US stocks, and Yahoo Finance only for Hong Kong stocks. Successful responses include `source`, `providers_tried`, `provider_failures`, `frequency`, `adjustment`, `as_of`, `latest_close`, `is_realtime`, and `bars`. These integrations request unadjusted daily history, not real-time quotes.
 
 `POST /api/tracking/analyze` accepts the current Detail page field names and returns the four-field `analysis` object consumed by the UI. It uses the transaction timeline and available daily bars around entry/exit dates, retrieves dated asset and market news snippets through Tavily Search when `TAVILY_API_KEY` is configured, then asks DeepSeek to produce the four analysis strings as JSON. News retrieval uses the `news` topic, searches the last 30 days independently of the last trade date, and discards results without an asset match. If relevant market news is unavailable, the prompt tells the model to disclose that limitation without inventing news or macro factors. A-share daily bars use the configured provider order; Wind is no longer used for Tracking news.
 

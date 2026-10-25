@@ -11,13 +11,19 @@
 
 ---
 
+## 🌐 在线体验
+
+**公网应用：**[http://47.111.85.251/](http://47.111.85.251/) · **应用版本：**[v2.0](https://github.com/Zia-Zeng/TradingNote/releases/tag/v2.0)
+
+应用运行在阿里云服务器上。Nginx 同源提供前端并转发 `/api` 请求；FastAPI 将交易、笔记和会话保存在该服务器的 SQLite 文件中，**并未使用阿里云 RDS**。目前没有登录或按用户隔离，访问者共享同一份记录，请只录入演示数据。下方截图用于介绍功能；在线生成结果取决于行情和 AI 服务的可用性。
+
 ## 🎯 项目介绍
 
 每笔交易都会留下盈亏，但当时的判断很容易被遗忘。TradingNote 将交易、持仓、笔记和可用的市场信息放在一起，帮助你回看：**当时怎么想、后来发生了什么、哪些行为值得继续观察**。
 
 产品围绕一条简单的路径展开：**记录 → 复盘 → 洞察 → 验证 → 学习**。你负责做决定，TradingNote 帮你把每次决定看得更清楚。
 
-这个仓库是面向移动端的产品原型。下方截图使用示例数据；实时生成的 AI 内容、Feed 和策略回测需要本地 API 及相应的数据服务。
+这个仓库包含已上线的移动端应用源码。AI、Feed 和策略回测功能通过线上 API 与相应的数据服务运行。
 
 ## ✨ 核心功能
 
@@ -29,6 +35,8 @@
 | **Agent · 策略回测** | 对 A 股或美股标的进行历史模拟，支持 SMA、RSI、MACD、布林带及成交量策略，查看收益、回撤和已完成交易的胜率。 |
 | **Tracking** | 查看持仓及盈亏，结合标的价格走势、交易时间线和个人笔记追踪投资过程，并借助 AI 回顾结果与决策。 |
 | **Feed** | 阅读结合市场话题与投资书籍的短文，在学习中保持更平稳的观察视角。 |
+
+建议评委依次体验：打开 **Today** 查看资产、日历和每日总结；在 **Agent → Review Trades** 查看交易复盘，并把多条建议合并保存为一条笔记；再进入 **Tracking** 查看标的时间线与 AI 分析。Agent 回测和 Feed 还依赖相应的外部服务配置。
 
 ## 📱 产品截图
 
@@ -77,24 +85,24 @@
   <img src="assets/readme/14-feed-article.png" alt="Feed 文章详情页：结合市场事件讨论投资心理和风险管理" width="260">
 </p>
 
-## 🚀 快速开始
+## 🏗️ 技术架构与行情来源
 
-### 1. 启动前端
+| 层级 | 当前线上配置 |
+| --- | --- |
+| 前端 | React、TypeScript、Vite、Tailwind CSS 与 PWA；由阿里云服务器上的 Nginx 提供 |
+| API 与存储 | FastAPI 经同源 `/api` 访问；SQLite 文件存于服务器磁盘，不提交到 Git |
+| AI 与搜索 | DeepSeek 生成分析；配置 Tavily 后检索相关新闻和资料 |
+| 历史日线 | A 股：Wind → BaoStock；美股：Yahoo Finance → Wind；港股：仅 Yahoo Finance |
 
-需要先安装 Node.js 和 npm。在终端中执行：
+行情可能延迟或暂时不可用；历史回测不代表未来收益。接口、本地开发和运行说明见[开发文档](DEVELOPMENT.md)。
 
-```sh
-git clone https://github.com/Zia-Zeng/TradingNote.git
-cd TradingNote
-npm ci
-npm run dev
-```
+## 🚀 本地运行
 
-打开 Vite 输出的本地地址，通常是 `http://127.0.0.1:5173/`。前端可以使用示例数据浏览。
+上面的公网地址是评委体验入口。如需自行运行开发副本，需同时启动后端与前端；仓库不包含线上数据库和密钥。
 
-### 2. 启动 API，体验联网功能
+### 1. 启动 API
 
-在**另一个终端**进入 `backend/`，创建 Python 虚拟环境、安装依赖并复制配置模板。
+在 `backend/` 中创建 Python 虚拟环境、安装依赖并复制配置模板。
 
 <details>
 <summary>Windows PowerShell</summary>
@@ -124,9 +132,20 @@ cp .env.example .env
 
 </details>
 
-请在执行最后一行命令前编辑 `backend/.env`。同一模板还列出了可选的行情、搜索和回测配置。密钥应保存在后端配置中，不要写进前端变量或提交到仓库。
+请先编辑 `backend/.env` 再启动 API。密钥只放在后端配置中，不写入前端变量或提交到仓库。本地 API 文档位于 `http://127.0.0.1:8000/docs`。
 
-API 文档位于 `http://127.0.0.1:8000/docs`。前端默认连接这个本地 API；如需连接其他地址，在前端 `.env` 中设置 `VITE_API_BASE_URL`。部分回测还需要额外的行情访问能力或 SuperMind 运行器，详情见[开发文档](DEVELOPMENT.md)。
+### 2. 启动前端
+
+需要安装 Node.js 和 npm。在另一个终端，从仓库根目录执行：
+
+```sh
+git clone https://github.com/Zia-Zeng/TradingNote.git
+cd TradingNote
+npm ci
+npm run dev
+```
+
+打开 Vite 输出的本地地址，通常是 `http://127.0.0.1:5173/`。本地前端默认连接 `http://127.0.0.1:8000`；API 不在本机时，可在**构建时**设置 `VITE_API_BASE_URL`。阿里云版本使用 `/`，使 API 请求保持在公网应用的同一来源。部分回测还需要额外的行情访问能力或 SuperMind 运行器，详情见[开发文档](DEVELOPMENT.md)。
 
 ## 🗂️ 文件导航
 
@@ -149,10 +168,10 @@ API 文档位于 `http://127.0.0.1:8000/docs`。前端默认连接这个本地 A
 
 ## 🛠️ 技术栈
 
-前端使用 React、TypeScript、Vite 和 Tailwind CSS；后端使用 Python、FastAPI 和 SQLite。AI 与行情服务通过后端环境变量配置。
+前端使用 React、TypeScript、Vite 和 Tailwind CSS；后端使用 Python、FastAPI 和 SQLite。阿里云服务器上的 Nginx 提供公网前端并代理 `/api`；AI 与行情服务通过后端环境变量配置。
 
 ## 🤝 参与贡献
 
 欢迎反馈问题并提交范围清晰的改进。报告问题时请附上复现步骤；提交代码前请移除密钥和个人交易数据。
 
-> TradingNote 是用于记录、学习和历史模拟的产品原型。回测结果不能预测未来表现，应用也不会连接券商或执行交易。
+> TradingNote 用于记录、学习和历史模拟。回测结果不能预测未来表现，应用也不会连接券商或执行交易。

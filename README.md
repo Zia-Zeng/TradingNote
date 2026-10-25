@@ -11,13 +11,19 @@
 
 ---
 
+## 🌐 Try the deployed app
+
+**Public app:** [http://47.111.85.251/](http://47.111.85.251/) · **Application version:** [v2.0](https://github.com/Zia-Zeng/TradingNote/releases/tag/v2.0)
+
+The public app runs on an Alibaba Cloud server. Its frontend and `/api` requests share one origin through Nginx; FastAPI stores trades, notes, and conversations in a SQLite file on that server. This is **not** an Alibaba Cloud RDS instance. There is currently no sign-in or per-user isolation: visitors share the same records, so please use demonstration data only. The screenshots below illustrate the product; live results depend on available market and AI services.
+
 ## 🎯 About the project
 
 Trades leave a profit or loss, but the thinking behind them is easy to forget. TradingNote brings your trades, portfolio, notes, and available market context together so you can revisit **what you decided, what happened next, and which patterns deserve attention**.
 
 The experience follows a simple loop: **record → review → understand → test → learn**. You make the decisions; TradingNote helps you see them more clearly.
 
-This repository contains a mobile-first prototype. The screenshots below show sample data. Live AI, Feed, and backtesting features depend on the local API and the relevant data services.
+This repository contains the source for the deployed, mobile-first application. AI, Feed, and backtesting features use the deployed API and the relevant data services.
 
 ## ✨ What you can do
 
@@ -29,6 +35,8 @@ This repository contains a mobile-first prototype. The screenshots below show sa
 | **Agent · Backtest** | Run historical simulations for A-share or US symbols using SMA, RSI, MACD, Bollinger Bands, or volume strategies; inspect returns, drawdown, and completed-trade win rate. |
 | **Tracking** | View open positions and their P&L, inspect each asset's price chart, trade timeline, and notes, and review results and decision-making with AI. |
 | **Feed** | Read short pieces that connect market topics with investing books, encouraging learning and a calmer perspective. |
+
+For a quick evaluation, open **Today** to see the portfolio, calendar, and daily summary; use **Agent → Review Trades** to inspect a recorded trade and save its suggestions as one note; then open **Tracking** for the asset timeline and AI analysis. Agent backtests and Feed depend on their configured external services.
 
 ## 📱 Product tour
 
@@ -77,24 +85,24 @@ Daily reading offers investing ideas and perspective when markets feel noisy. Op
   <img src="assets/readme/14-feed-article.png" alt="Full Feed essay connecting a market event with investor psychology and risk management" width="260">
 </p>
 
-## 🚀 Get started
+## 🏗️ Architecture and data sources
 
-### 1. Run the frontend
+| Layer | Current production setup |
+| --- | --- |
+| Web app | React, TypeScript, Vite, Tailwind CSS, and PWA assets served by Nginx on Alibaba Cloud |
+| API and storage | FastAPI behind the same-origin `/api` route; SQLite on the server's disk, excluded from Git |
+| AI and search | DeepSeek for generated analysis; Tavily for relevant search and news when configured |
+| Daily market history | A-shares: Wind → BaoStock; US stocks: Yahoo Finance → Wind; Hong Kong stocks: Yahoo Finance only |
 
-You need Node.js and npm. From a terminal:
+Market data can be delayed or unavailable, and historical backtests do not predict future returns. See [developer notes](DEVELOPMENT.md) for the API, local setup, and operational details.
 
-```sh
-git clone https://github.com/Zia-Zeng/TradingNote.git
-cd TradingNote
-npm ci
-npm run dev
-```
+## 🚀 Run locally
 
-Open the local URL printed by Vite, usually `http://127.0.0.1:5173/`. The frontend can be explored with sample data.
+The public URL above is the evaluation entry point. To run a separate development copy, start both the API and the frontend; the repository does not include the public server's database or credentials.
 
-### 2. Start the API for connected features
+### 1. Start the API
 
-In a **second terminal**, enter `backend/`, create a Python virtual environment, install the dependencies, and copy the configuration template.
+Create a Python virtual environment in `backend/`, install the dependencies, and copy the configuration template.
 
 <details>
 <summary>Windows PowerShell</summary>
@@ -124,9 +132,20 @@ cp .env.example .env
 
 </details>
 
-Edit `backend/.env` before the final command. The template also lists optional market-data, search, and backtest settings. Keep API keys in this backend file, never in frontend variables or commits.
+Edit `backend/.env` before starting the API. Keep keys in this backend file, never in frontend variables or commits. Local API documentation is at `http://127.0.0.1:8000/docs`.
 
-API documentation is available at `http://127.0.0.1:8000/docs`. The frontend points to this local API by default; for another API address, set `VITE_API_BASE_URL` in the frontend `.env` file. Some backtests require additional market-data access or the SuperMind runner; see [developer notes](DEVELOPMENT.md).
+### 2. Start the frontend
+
+You need Node.js and npm. In another terminal, from the repository root:
+
+```sh
+git clone https://github.com/Zia-Zeng/TradingNote.git
+cd TradingNote
+npm ci
+npm run dev
+```
+
+Open the local URL printed by Vite, usually `http://127.0.0.1:5173/`. The local frontend defaults to `http://127.0.0.1:8000`; `VITE_API_BASE_URL` is a **build-time** setting when the API is hosted elsewhere. The Alibaba Cloud build uses `/` so its API calls remain on the public site's origin. Some backtests require additional market-data access or the SuperMind runner; see [developer notes](DEVELOPMENT.md).
 
 ## 🗂️ File navigation
 
@@ -149,10 +168,10 @@ API documentation is available at `http://127.0.0.1:8000/docs`. The frontend poi
 
 ## 🛠️ Built with
 
-React, TypeScript, Vite, and Tailwind CSS on the frontend; Python, FastAPI, and SQLite on the backend. AI and market-data integrations are configured through the backend environment.
+React, TypeScript, Vite, and Tailwind CSS on the frontend; Python, FastAPI, and SQLite on the backend. Nginx serves the public frontend and proxies `/api` on the Alibaba Cloud server. AI and market-data integrations are configured through the backend environment.
 
 ## 🤝 Contributing
 
 Feedback, bug reports, and focused pull requests are welcome. Include the steps to reproduce a problem and keep credentials and personal trading data out of commits.
 
-> TradingNote is a journaling, learning, and historical-simulation prototype. Backtest results do not predict future performance, and the app does not connect to a brokerage or place trades.
+> TradingNote is for journaling, learning, and historical simulation. Backtest results do not predict future performance, and the app does not connect to a brokerage or place trades.
