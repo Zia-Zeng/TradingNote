@@ -1,6 +1,18 @@
 import unittest
+from datetime import datetime, timezone
 
 from app.daily_brief import build_daily_brief
+
+
+def _missing_index(market: str, name: str, trade_date: str, status: str) -> dict:
+    return {"market": market, "name": name, "date": trade_date, "status": status, "change_pct": None}
+
+
+def _brief_without_moves(trade_date: str, benchmarks: list[dict], now: datetime, **extra) -> dict:
+    return build_daily_brief({
+        "trade_date": trade_date, "portfolio_status": "unavailable", "portfolio_result": None,
+        "market_benchmarks": benchmarks, **extra,
+    }, now=now)
 
 
 class DailyBriefTests(unittest.TestCase):
@@ -77,6 +89,74 @@ class DailyBriefTests(unittest.TestCase):
             "portfolio_result": {"pnl_by_currency": {"CNY": 100}, "snapshot_mismatch": True},
         })
         self.assertEqual(brief["portfolio"]["amounts"], [])
+
+    def test_weekend_is_reported_as_market_closed_not_unavailable(self):
+        gold = {"market": "COMMODITY", "name": "Gold futures", "code": "GC=F", "date": "2026-10-24", "status": "unavailable", "close": None, "change_pct": None}
+        brief = _brief_without_moves(
+            "2026-10-24", [_missing_index("CN", "CSI 300", "2026-10-24", "no_session")],
+            datetime(2026, 10, 24, 13, 57, tzinfo=timezone.utc), market_commodities=[gold],
+        )
+        self.assertEqual(brief["market"]["status"], "closed")
+        self.assertEqual(brief["market"]["text"], "The A-share market was closed on Saturday, 2026-10-24 (weekend).")
+        self.assertEqual(brief["portfolio"]["status"], "market_closed")
+        self.assertEqual(brief["portfolio"]["text"], "No daily P&L because the A-share market was closed on this date.")
+        self.assertEqual(brief["caveats"], [])
+
+    def test_weekend_closure_does_not_depend_on_data_fetch(self):
+        brief = _brief_without_moves("2026-10-25", [
+            _missing_index("CN", "CSI 300", "2026-10-25", "unavailable"),
+            _missing_index("HK", "Hang Seng Index", "2026-10-25", "unavailable"),
+            _missing_index("US", "S&P 500", "2026-10-25", "no_session"),
+        ], datetime(2026, 10, 25, 3, 0, tzinfo=timezone.utc))
+        self.assertEqual(brief["market"]["text"], "The A-share, Hong Kong, and U.S. markets were closed on Sunday, 2026-10-25 (weekend).")
+        self.assertEqual(brief["portfolio"]["text"], "No daily P&L because the A-share, Hong Kong, and U.S. markets were closed on this date.")
+
+    def test_past_weekday_without_a_session_is_a_market_holiday(self):
+        gold = {"market": "COMMODITY", "name": "Gold futures", "code": "GC=F", "date": "2026-10-01", "status": "complete", "close": 2650.5, "change_pct": 0.4}
+        brief = _brief_without_moves(
+            "2026-10-01", [_missing_index("CN", "CSI 300", "2026-10-01", "no_session")],
+            datetime(2026, 10, 25, 3, 0, tzinfo=timezone.utc), market_commodities=[gold],
+        )
+        self.assertEqual(brief["market"]["text"], "The A-share market was closed on Thursday, 2026-10-01 (market holiday).")
+        self.assertEqual(len(brief["market"]["commodities"]), 1)
+        self.assertEqual(brief["portfolio"]["status"], "market_closed")
+
+    def test_missing_close_on_the_review_day_is_pending_not_closed(self):
+        brief = _brief_without_moves(
+            "2026-10-23", [_missing_index("CN", "CSI 300", "2026-10-23", "no_session")],
+            datetime(2026, 10, 23, 1, 39, tzinfo=timezone.utc),
+        )
+        self.assertEqual(brief["market"]["status"], "pending")
+        self.assertEqual(brief["market"]["text"], "Closing index data for Friday, 2026-10-23 was not yet available when this review was generated.")
+        self.assertEqual(brief["portfolio"]["status"], "unavailable")
+
+    def test_us_session_still_trading_after_beijing_midnight_is_pending(self):
+        brief = _brief_without_moves(
+            "2026-10-23", [_missing_index("US", "S&P 500", "2026-10-23", "no_session")],
+            datetime(2026, 10, 23, 18, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(brief["market"]["status"], "pending")
+
+    def test_fetch_failure_on_a_trading_day_stays_unavailable(self):
+        brief = _brief_without_moves(
+            "2026-10-22", [_missing_index("CN", "CSI 300", "2026-10-22", "unavailable")],
+            datetime(2026, 10, 25, 3, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(brief["market"]["status"], "unavailable")
+        self.assertEqual(brief["market"]["text"], "Market data is currently unavailable.")
+        self.assertIn("Verified index data is unavailable for this date.", brief["caveats"])
+        self.assertEqual(brief["portfolio"]["status"], "unavailable")
+
+    def test_crypto_never_closes_so_partial_closure_is_explained(self):
+        brief = _brief_without_moves("2026-10-24", [
+            _missing_index("CN", "CSI 300", "2026-10-24", "no_session"),
+            _missing_index("CRYPTO", "Bitcoin", "2026-10-24", "unavailable"),
+        ], datetime(2026, 10, 25, 3, 0, tzinfo=timezone.utc))
+        self.assertEqual(
+            brief["market"]["text"],
+            "The A-share market was closed on Saturday, 2026-10-24 (weekend). Index data for other markets was not available when this review was generated.",
+        )
+        self.assertEqual(brief["portfolio"]["status"], "unavailable")
 
 
 if __name__ == "__main__":

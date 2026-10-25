@@ -90,7 +90,7 @@ function dailyReviewAnswer(review: DailyReview): string {
     const portfolioAmounts = dailyPortfolioAmounts(review);
     sections.push('Portfolio Performance', portfolioAmounts.length
       ? portfolioAmounts.map(item => `${item.currency} ${item.amount > 0 ? '+' : ''}${item.amount.toFixed(2)}`).join(' | ')
-      : 'Verified portfolio P&L is unavailable for this date.');
+      : brief.portfolio.status === 'market_closed' ? brief.portfolio.text : 'Verified portfolio P&L is unavailable for this date.');
     if (brief.narrative?.insight) sections.push(brief.narrative.insight);
     if (brief.contributions_by_market?.length) {
       for (const group of brief.contributions_by_market) {

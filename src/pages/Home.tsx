@@ -519,7 +519,7 @@ export default function Home() {
                     </section>
                     <section>
                       <h3 className="mb-0.5 text-[11px] font-bold text-[#0B2545]">Portfolio Performance</h3>
-                      {dailyPortfolioAmounts(dailyReview).length > 0 && (
+                      {dailyPortfolioAmounts(dailyReview).length > 0 ? (
                         <p className="text-[13px] font-bold">
                           {dailyPortfolioAmounts(dailyReview).map((item, index) => (
                             <React.Fragment key={item.currency}>
@@ -531,6 +531,8 @@ export default function Home() {
                             </React.Fragment>
                           ))}
                         </p>
+                      ) : dailyReview.summary_brief.portfolio.status === 'market_closed' && (
+                        <p className="text-[11px] leading-relaxed text-[#134074]">{dailyReview.summary_brief.portfolio.text}</p>
                       )}
                     </section>
                     {(marketContributions.length > 0 || dailyReview.summary_brief.winners.length > 0 || dailyReview.summary_brief.losers.length > 0) && (

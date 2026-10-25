@@ -8,9 +8,14 @@ presented as verified whole-account P&L.
 from __future__ import annotations
 
 import math
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 
+WEEKDAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+MARKET_LABELS = {"CN": "A-share", "HK": "Hong Kong", "US": "U.S."}
+# U.S. uses EST all year so a session still trading under daylight time is never treated as finished.
+MARKET_UTC_OFFSET_HOURS = {"CN": 8, "HK": 8, "US": -5, "CRYPTO": 0}
 INDEX_NAMES = {
     "Shanghai Composite": "Shanghai Composite",
     "Shenzhen Component": "Shenzhen Component",
@@ -51,13 +56,38 @@ def _signed_percent(value: float) -> str:
     return f"{value:+.2f}%"
 
 
-def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
+def _session_state(row: dict[str, Any], review_day: date, now: datetime) -> str:
+    """Explain a missing index move as closed, pending, or unavailable."""
+    market = str(row.get("market") or "").upper()
+    if market != "CRYPTO" and review_day.weekday() >= 5:
+        return "closed"
+    if row.get("status") != "no_session":
+        return "unavailable"
+    market_today = (now.astimezone(timezone.utc) + timedelta(hours=MARKET_UTC_OFFSET_HOURS.get(market, 8))).date()
+    if review_day >= market_today:
+        return "pending"
+    return "unavailable" if market == "CRYPTO" else "closed"
+
+
+def _closed_subject(markets: list[str]) -> str:
+    labels = list(dict.fromkeys(MARKET_LABELS[market] for market in markets if market in MARKET_LABELS))
+    if not labels:
+        return "markets were"
+    if len(labels) == 1:
+        return f"the {labels[0]} market was"
+    joined = " and ".join(labels) if len(labels) == 2 else f"{', '.join(labels[:-1])}, and {labels[-1]}"
+    return f"the {joined} markets were"
+
+
+def build_daily_brief(context: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
     """Build display facts without LLM-generated figures or account claims."""
     review_date = context["trade_date"]
+    index_rows = [
+        row for row in context.get("market_benchmarks", [])
+        if str(row.get("market") or "").upper() != "COMMODITY"
+    ]
     indices = []
-    for row in context.get("market_benchmarks", []):
-        if str(row.get("market") or "").upper() == "COMMODITY":
-            continue
+    for row in index_rows:
         change = _number(row.get("change_pct"))
         if row.get("status") != "complete" or row.get("date", review_date) != review_date or change is None:
             continue
@@ -109,16 +139,30 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(breadth, dict) or breadth.get("status") != "complete":
         breadth = None
 
+    review_day = date.fromisoformat(review_date)
+    now = now or datetime.now(timezone.utc)
+    states = [] if indices else [_session_state(row, review_day, now) for row in index_rows]
+    closed_markets = [str(row.get("market") or "").upper() for row, state in zip(index_rows, states) if state == "closed"]
+    all_closed = bool(states) and len(closed_markets) == len(states)
+    day_label = f"{WEEKDAY_NAMES[review_day.weekday()]}, {review_date}"
     warnings = []
-    if not indices:
+    if indices:
+        market_status = "reported"
+        market_text = ", ".join(f"{item['name']} {_signed_percent(item['change_pct'])}" for item in indices) + "."
+    elif closed_markets:
+        market_status = "closed"
+        subject = _closed_subject(closed_markets)
+        reason = "weekend" if review_day.weekday() >= 5 else "market holiday"
+        market_text = f"{subject[0].upper()}{subject[1:]} closed on {day_label} ({reason})."
+        if not all_closed:
+            market_text += " Index data for other markets was not available when this review was generated."
+    elif states and all(state == "pending" for state in states):
+        market_status = "pending"
+        market_text = f"Closing index data for {day_label} was not yet available when this review was generated."
+    else:
+        market_status = "unavailable"
         warnings.append("Verified index data is unavailable for this date.")
-    market_text = ", ".join(f"{item['name']} {_signed_percent(item['change_pct'])}" for item in indices)
-    if market_text:
-        market_text += "."
-    if not market_text:
-        market_text = "Market data is currently unavailable."
-    if commodities and not indices:
-        market_text = ""
+        market_text = "" if commodities else "Market data is currently unavailable."
 
     result = context.get("portfolio_result") or {}
     raw_pnl = result.get("pnl_by_currency") or {}
@@ -128,14 +172,16 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
             amount = _number(value)
             if amount is not None:
                 amounts.append({"currency": currency, "amount": round(amount, 2)})
-    portfolio_status = "estimated" if amounts else "unavailable"
-    portfolio_text = (
-        "Estimated daily P&L for recorded securities; this has not been reconciled against the full account balance."
-        if amounts else "Daily portfolio P&L could not be verified."
-    )
     if amounts:
+        portfolio_status = "estimated"
+        portfolio_text = "Estimated daily P&L for recorded securities; this has not been reconciled against the full account balance."
         warnings.append("Cash flows, fees, and FX have not been fully reconciled; figures are estimates for recorded securities only.")
+    elif all_closed:
+        portfolio_status = "market_closed"
+        portfolio_text = f"No daily P&L because {_closed_subject(closed_markets)} closed on this date."
     else:
+        portfolio_status = "unavailable"
+        portfolio_text = "Daily portfolio P&L could not be verified."
         warnings.append("Complete holdings and trade data are unavailable, so P&L and attribution are not shown.")
 
     winners: list[dict[str, Any]] = []
@@ -189,7 +235,7 @@ def build_daily_brief(context: dict[str, Any]) -> dict[str, Any]:
         "report_type": "market_portfolio_daily_brief",
         "review_date": review_date,
         "overall_status": "partial" if indices or commodities or amounts else "unavailable",
-        "market": {"indices": indices, "sectors": sectors, "commodities": commodities, "leaders": leaders, "laggards": laggards, "breadth": breadth, "text": market_text},
+        "market": {"status": market_status, "indices": indices, "sectors": sectors, "commodities": commodities, "leaders": leaders, "laggards": laggards, "breadth": breadth, "text": market_text},
         "portfolio": {
             "status": portfolio_status, "scope": "recorded_securities",
             "amounts": amounts, "daily_return_pct": None, "text": portfolio_text,

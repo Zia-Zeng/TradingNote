@@ -473,6 +473,23 @@ class SeparateDailyGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["summary_facts"]["portfolio_status"], "complete")
         self.assertEqual(result["summary_version"], today.DAILY_SUMMARY_VERSION)
 
+    async def test_closed_market_summary_says_closed_and_tells_the_narrator(self):
+        context = {
+            "trade_date": "2026-10-24", "portfolio_status": "unavailable", "portfolio_result": None,
+            "portfolio_warnings": [], "industry_performance": [], "industry_status": "unavailable",
+            "market_benchmarks": [{"market": "CN", "name": "CSI 300", "date": "2026-10-24", "status": "no_session", "change_pct": None}],
+        }
+        with patch("app.today._daily_summary_context", new=AsyncMock(return_value=context)), \
+                patch("app.today._deepseek_json", new=AsyncMock(return_value=json.dumps({"insight": ""}))) as narrator, \
+                patch("app.today._save_daily_review_part"):
+            result = await today.generate_daily_summary("2026-10-24")
+
+        facts = narrator.await_args.args[0]["daily_brief_facts"]
+        self.assertEqual(facts["index_direction"], "market_closed")
+        self.assertEqual(facts["portfolio_direction"], "market_closed")
+        self.assertIn("The A-share market was closed on Saturday, 2026-10-24 (weekend).", result["summary"])
+        self.assertNotIn("unavailable", result["summary"])
+
 
 class PortfolioPnlTests(unittest.TestCase):
     def setUp(self):

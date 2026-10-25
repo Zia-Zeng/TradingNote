@@ -55,7 +55,7 @@ async def _portfolio_price_history(key: tuple[str, str, str], code: str, start: 
             return saved["bars"]
         raise
 # Increment when Daily Summary rules or its visible output contract changes.
-DAILY_SUMMARY_VERSION = 8
+DAILY_SUMMARY_VERSION = 9
 TRADE_REVIEW_NOTE_SCHEMA_VERSION = 3
 LEGACY_CHINESE_EMPTY_REVIEW = "\u5f53\u5929\u6ca1\u6709\u6210\u4ea4\uff0c\u4e5f\u6ca1\u6709\u76f8\u5173\u7b14\u8bb0\u53ef\u4f9b\u5224\u65ad\uff1b\u56e0\u6b64\u6ca1\u6709\u5177\u4f53\u4ea4\u6613\u52a8\u4f5c\u9700\u8981\u590d\u76d8\uff0c\u4e5f\u4e0d\u636e\u6b64\u8bc4\u4ef7\u89c2\u671b\u51b3\u7b56\u7684\u597d\u574f\u3002"
 
@@ -2384,10 +2384,10 @@ async def generate_daily_summary(trade_date: str) -> dict[str, Any]:
     elif market_moves:
         index_direction = "mixed"
     else:
-        index_direction = "unavailable"
+        index_direction = {"closed": "market_closed", "pending": "not_yet_available"}.get(brief["market"]["status"], "unavailable")
     pnl_amounts = brief["portfolio"]["amounts"]
     if not pnl_amounts:
-        portfolio_direction = "unavailable"
+        portfolio_direction = "market_closed" if brief["portfolio"]["status"] == "market_closed" else "unavailable"
     elif all(item["amount"] >= 0 for item in pnl_amounts):
         portfolio_direction = "positive_or_flat"
     elif all(item["amount"] <= 0 for item in pnl_amounts):

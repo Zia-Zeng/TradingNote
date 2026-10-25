@@ -75,7 +75,7 @@ export type DailySummaryBrief = {
   overall_status: 'partial' | 'unavailable';
   market: { text: string; indices: Array<{ name: string; change_pct: number; date: string; source?: string | null }>; sectors: Array<{ name: string; change_pct: number; related_holdings: string[]; date: string; source?: string | null }>; commodities?: Array<{ name: string; code: string; close: number; change_pct: number; currency: string; unit: string; date: string; source?: string | null }>; leaders?: Array<{ name: string; change_pct: number }>; laggards?: Array<{ name: string; change_pct: number }>; breadth?: { status: string; date?: string; up?: number; down?: number; flat?: number | null; source?: string; title?: string; url?: string } | null };
   narrative?: { insight?: string; market_narrative?: string; portfolio_narrative?: string };
-  portfolio: { status: 'calculated' | 'unavailable'; scope: 'imported_portfolio'; amounts: Array<{ currency: string; amount: number }>; daily_return_pct: null; text: string };
+  portfolio: { status: 'calculated' | 'unavailable' | 'market_closed'; scope: 'imported_portfolio'; amounts: Array<{ currency: string; amount: number }>; daily_return_pct: null; text: string };
   winners: Array<{ name: string; code?: string | null; currency: string; amount: number; status: 'calculated' }>;
   losers: Array<{ name: string; code?: string | null; currency: string; amount: number; status: 'calculated' }>;
   contributions_by_market?: Array<{ market: string; market_name: string; currency: string; winners: Array<{ name: string; code?: string | null; amount: number }>; losers: Array<{ name: string; code?: string | null; amount: number }> }>;
