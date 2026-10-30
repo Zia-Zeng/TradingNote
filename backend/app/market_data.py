@@ -366,11 +366,51 @@ async def _wind_history(code: str, start: str, end: str) -> list[dict[str, Any]]
             raise RuntimeError("Wind returned no usable daily bars.")
 
 
+def _longbridge_history(code: str, start: str, end: str) -> list[dict[str, Any]]:
+    from longbridge.openapi import AdjustType, Config, OAuthBuilder, Period, QuoteContext
+
+    symbol = re.sub(r"\.(?:O|N|US)$", "", code.upper()) + ".US"
+    client_id = os.getenv("LONGBRIDGE_OAUTH_CLIENT_ID", "").strip()
+    if client_id:
+        def authorization_required(_url: str) -> None:
+            raise RuntimeError("Longbridge OAuth requires interactive authorization.")
+        oauth = OAuthBuilder(client_id).build(authorization_required)
+        config = Config.from_oauth(oauth)
+    else:
+        config = Config.from_apikey_env()
+    context = QuoteContext(config)
+    first, last = date.fromisoformat(start), date.fromisoformat(end)
+    rows = []
+    def append_bars(bars: Any) -> None:
+        for bar in bars:
+            timestamp = bar.timestamp
+            if timestamp.tzinfo is not None:
+                timestamp = timestamp.astimezone(ZoneInfo("America/New_York"))
+            rows.append({"date": timestamp.date().isoformat(), "open": bar.open, "high": bar.high,
+                         "low": bar.low, "close": bar.close, "volume": bar.volume, "amount": bar.turnover})
+    while first <= last:
+        # At most 1,000 calendar days per request, below the API's 1,000-bar cap.
+        through = min(last, first + timedelta(days=999))
+        try:
+            append_bars(context.history_candlesticks_by_date(symbol, Period.Day, AdjustType.NoAdjust, first, through))
+        except Exception as exc:
+            if "301607" not in str(exc):
+                raise
+            recent = context.candlesticks(symbol, Period.Day, 1000, AdjustType.NoAdjust)
+            rows = []
+            append_bars(recent)
+            if len(recent) >= 1000 and rows and rows[0]["date"] > start:
+                raise RuntimeError("Longbridge recent bars do not cover the requested start date.") from exc
+            return _normalize_rows(rows, start, end)
+        first = through + timedelta(days=1)
+    return _normalize_rows(rows, start, end)
+
+
 async def fetch_us_history(
     code: str, start_date: date | str, end_date: date | str,
     required_fields: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """Fetch US daily bars from Yahoo, then Wind when Yahoo is unavailable."""
+    """Fetch US daily bars from Yahoo, then Longbridge, then Wind."""
     symbol = code.strip().upper()
     if not re.fullmatch(r"[A-Z][A-Z0-9.-]{0,15}", symbol):
         raise ValueError("A valid US stock ticker is required.")
@@ -378,21 +418,34 @@ async def fetch_us_history(
     if start > end:
         raise ValueError("start_date must be earlier than or equal to end_date.")
     failures: list[dict[str, str]] = []
+    tried: list[str] = []
     yahoo_symbol = re.sub(r"\.(?:O|N)$", "", symbol)
+    tried.append("Yahoo Finance")
     try:
         result = await asyncio.wait_for(run_in_threadpool(_yahoo_history, yahoo_symbol, start, end), timeout=20)
         bars = result.get("bars", [])
         if not bars or any(any(field not in bar for field in required_fields) for bar in bars):
             raise RuntimeError("Yahoo returned incomplete daily bars.")
-        return _response(symbol, bars, "Yahoo Finance", ["Yahoo Finance"], failures)
+        return _response(symbol, bars, "Yahoo Finance", tried, failures)
     except Exception as exc:
         logger.warning("US market data Yahoo request failed: %s", type(exc).__name__)
         failures.append({"provider": "Yahoo Finance", "reason": type(exc).__name__})
+    if os.getenv("LONGBRIDGE_OAUTH_CLIENT_ID", "").strip() or all(os.getenv(key, "").strip() for key in ("LONGBRIDGE_APP_KEY", "LONGBRIDGE_APP_SECRET", "LONGBRIDGE_ACCESS_TOKEN")):
+        tried.append("Longbridge")
+        try:
+            bars = await asyncio.wait_for(run_in_threadpool(_longbridge_history, symbol, start, end), timeout=25)
+            if not bars or any(any(field not in bar for field in required_fields) for bar in bars):
+                raise RuntimeError("Longbridge returned incomplete daily bars.")
+            return _response(symbol, bars, "Longbridge", tried, failures)
+        except Exception as exc:
+            logger.warning("US market data Longbridge request failed: %s", type(exc).__name__)
+            failures.append({"provider": "Longbridge", "reason": type(exc).__name__})
+    tried.append("Wind Finmarket")
     try:
         bars = await asyncio.wait_for(_wind_history(symbol, start, end), timeout=12)
         if not bars or any(any(field not in bar for field in required_fields) for bar in bars):
             raise RuntimeError("Wind returned incomplete daily bars.")
-        return _response(symbol, bars, "Wind Finmarket", ["Yahoo Finance", "Wind Finmarket"], failures)
+        return _response(symbol, bars, "Wind Finmarket", tried, failures)
     except Exception as exc:
         logger.warning("US market data Wind request failed: %s", type(exc).__name__)
         failures.append({"provider": "Wind Finmarket", "reason": type(exc).__name__})

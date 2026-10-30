@@ -1,7 +1,8 @@
 import asyncio
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,6 +11,24 @@ from app.cached_history import cached_daily_history
 
 
 class CachedHistoryTests(unittest.TestCase):
+    def test_us_recent_cached_bar_is_refreshed(self):
+        today = datetime.now(ZoneInfo('America/New_York')).date()
+        yesterday = today - timedelta(days=1)
+        calls = []
+
+        async def fetch(code, market, start, end):
+            calls.append((start, end))
+            return {'source': 'Test', 'bars': [{'date': yesterday.isoformat(), 'close': len(calls)}]}
+
+        with tempfile.TemporaryDirectory(dir=storage.DATABASE_PATH.parent) as directory, \
+             patch.object(storage, 'DATABASE_PATH', Path(directory) / 'history.sqlite3'), \
+             patch('app.cached_history.fetch_daily_history', new=fetch):
+            storage.initialize_storage()
+            asyncio.run(cached_daily_history('AAPL', 'US', yesterday, yesterday))
+            refreshed = asyncio.run(cached_daily_history('AAPL', 'US', yesterday, yesterday))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(refreshed['latest_close'], 2)
+
     def test_persists_bars_and_fetches_only_missing_dates(self):
         calls = []
 

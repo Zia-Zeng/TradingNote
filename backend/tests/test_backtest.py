@@ -61,6 +61,29 @@ class BacktestIntegrationTests(unittest.TestCase):
         yahoo.assert_called_once_with("AAPL", "2026-01-01", "2026-04-10")
         wind.assert_not_awaited()
 
+    def test_longbridge_is_used_when_yahoo_fails(self):
+        async def inline_threadpool(function, *args):
+            return function(*args)
+
+        credentials = {"LONGBRIDGE_APP_KEY": "key", "LONGBRIDGE_APP_SECRET": "secret", "LONGBRIDGE_ACCESS_TOKEN": "token"}
+        with patch.dict("os.environ", credentials), \
+                patch.object(market_data, "_longbridge_history", return_value=self.bars) as longbridge, \
+                patch.object(market_data, "_yahoo_history", side_effect=RuntimeError()) as yahoo, \
+                patch.object(market_data, "run_in_threadpool", new=inline_threadpool):
+            result = asyncio.run(market_data.fetch_us_history("GOOGL.O", "2026-01-01", "2026-04-10"))
+        self.assertEqual(result["source"], "Longbridge")
+        longbridge.assert_called_once_with("GOOGL.O", "2026-01-01", "2026-04-10")
+        yahoo.assert_called_once()
+        self.assertEqual(result["providers_tried"], ["Yahoo Finance", "Longbridge"])
+
+        with patch.dict("os.environ", credentials), \
+                patch.object(market_data, "_longbridge_history") as longbridge, \
+                patch.object(market_data, "_yahoo_history", return_value={"bars": self.bars}), \
+                patch.object(market_data, "run_in_threadpool", new=inline_threadpool):
+            result = asyncio.run(market_data.fetch_us_history("GOOGL.O", "2026-01-01", "2026-04-10"))
+        self.assertEqual(result["source"], "Yahoo Finance")
+        longbridge.assert_not_called()
+
     def test_us_history_falls_back_to_wind_when_yahoo_has_no_bars(self):
         async def inline_threadpool(function, *args):
             return function(*args)

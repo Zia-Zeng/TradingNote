@@ -3,8 +3,9 @@
 import asyncio
 import logging
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .market_data import fetch_daily_history
 from .storage import get_market_history_cache, save_market_history_segment
@@ -43,6 +44,13 @@ async def cached_daily_history(code: str, market: str, start_date: date, end_dat
                 segments.append((start, (date.fromisoformat(coverage["start_date"]) - timedelta(days=1)).isoformat()))
             if end > coverage["checked_through"]:
                 segments.append(((date.fromisoformat(coverage["checked_through"]) + timedelta(days=1)).isoformat(), end))
+            # Refresh recent US bars so an intraday bar is corrected after close,
+            # even if the next visit happens on a later day or over a weekend.
+            recent_start = (datetime.now(ZoneInfo("America/New_York")).date() - timedelta(days=7)).isoformat()
+            overlap_start = max(start, recent_start, coverage["start_date"])
+            overlap_end = min(end, coverage["checked_through"])
+            if normalized_market == "US" and overlap_start <= overlap_end:
+                segments.append((overlap_start, overlap_end))
         refresh_failed = False
         for segment_start, segment_end in segments:
             try:
