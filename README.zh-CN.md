@@ -27,12 +27,6 @@
 
 ## 🎬 项目宣传片
 
-<p align="center">
-  <img src="assets/readme/tradingnote-intro-cover.jpg" alt="M-TradingNote 项目宣传片封面" width="640">
-</p>
-
-点击下方播放器，即可在 GitHub 当前页面观看：
-
 https://github.com/user-attachments/assets/f47ea8f2-0d0f-4fc1-954f-8340dce268d2
 
 ## ✨ 核心功能
