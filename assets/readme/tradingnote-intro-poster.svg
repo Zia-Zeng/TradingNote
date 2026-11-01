@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 675" role="img" aria-labelledby="title desc">
+  <title id="title">TradingNote introduction film</title>
+  <desc id="desc">A dark blue TradingNote cover with a play button and a chart connecting a trade to a journal entry.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#091b33"/>
+      <stop offset="1" stop-color="#142f46"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#83e6d4"/>
+      <stop offset="1" stop-color="#f6d88c"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="675" rx="28" fill="url(#background)"/>
+  <path d="M0 515 C220 450 370 555 590 485 S925 360 1200 455 L1200 675 L0 675Z" fill="#1e4252" opacity=".38"/>
+  <g opacity=".2" stroke="#93c6c5" stroke-width="2">
+    <path d="M60 142H1140M60 252H1140M60 362H1140M60 472H1140M60 582H1140"/>
+    <path d="M160 110V605M360 110V605M560 110V605M760 110V605M960 110V605"/>
+  </g>
+  <path d="M85 450 L215 390 L338 432 L467 298 L577 340 L705 214 L820 268 L949 180 L1115 220" fill="none" stroke="url(#accent)" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="467" cy="298" r="11" fill="#83e6d4"/>
+  <circle cx="705" cy="214" r="11" fill="#f6d88c"/>
+  <rect x="86" y="68" width="252" height="54" rx="27" fill="#ffffff" opacity=".1"/>
+  <text x="111" y="104" fill="#ffffff" font-family="Arial, sans-serif" font-size="26" font-weight="700" letter-spacing="1">TRADINGNOTE</text>
+  <text x="88" y="226" fill="#ffffff" font-family="Arial, sans-serif" font-size="60" font-weight="700">See your trades clearly.</text>
+  <text x="90" y="277" fill="#b9d6dc" font-family="Arial, sans-serif" font-size="28">Record. Review. Understand. Test. Learn.</text>
+  <circle cx="600" cy="418" r="75" fill="#ffffff" opacity=".95"/>
+  <path d="M584 382 L584 454 L644 418Z" fill="#103348"/>
+  <text x="600" y="588" fill="#ffffff" font-family="Arial, sans-serif" font-size="24" font-weight="700" letter-spacing="4" text-anchor="middle">WATCH THE INTRO FILM</text>
+</svg>

@@ -25,6 +25,12 @@ The experience follows a simple loop: **record → review → understand → tes
 
 This repository contains the source for the deployed, mobile-first application. AI, Feed, and backtesting features use the deployed API and the relevant data services.
 
+## 🎬 Introduction film
+
+[![Watch the TradingNote introduction film](assets/readme/tradingnote-intro-poster.svg)](assets/readme/tradingnote-intro.mp4)
+
+Click the cover to watch the introduction film (MP4, 9.5 MB).
+
 ## ✨ What you can do
 
 | Area | What it helps you do |

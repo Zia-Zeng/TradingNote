@@ -25,6 +25,12 @@
 
 这个仓库包含已上线的移动端应用源码。AI、Feed 和策略回测功能通过线上 API 与相应的数据服务运行。
 
+## 🎬 项目宣传片
+
+[![观看 TradingNote 项目宣传片](assets/readme/tradingnote-intro-poster.svg)](assets/readme/tradingnote-intro.mp4)
+
+点击封面观看项目宣传片（MP4，9.5 MB）。
+
 ## ✨ 核心功能
 
 | 模块 | 你可以做什么 |
