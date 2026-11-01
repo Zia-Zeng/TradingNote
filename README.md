@@ -27,9 +27,13 @@ This repository contains the source for the deployed, mobile-first application. 
 
 ## 🎬 Introduction film
 
-[![Watch the TradingNote introduction film](assets/readme/tradingnote-intro-poster.svg)](assets/readme/tradingnote-intro.mp4)
+<p align="center">
+  <img src="assets/readme/tradingnote-intro-cover.jpg" alt="M-TradingNote introduction film cover" width="640">
+</p>
 
-Click the cover to watch the introduction film (MP4, 9.5 MB).
+Play the introduction film below, right here on GitHub:
+
+https://github.com/user-attachments/assets/f47ea8f2-0d0f-4fc1-954f-8340dce268d2
 
 ## ✨ What you can do
 
