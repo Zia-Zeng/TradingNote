@@ -458,6 +458,8 @@ function AgentMarkdown({ text, reviewAsset }: { text: string; reviewAsset?: stri
       paragraph.push(lines[index].trim());
       index += 1;
     }
+    // Keep every asset's review Overview table-only, including saved replies.
+    if (isReviewReply && section === 'overview') continue;
     const paragraphText = (section === 'market background'
       ? paragraph.filter(line => !hiddenMarketBackgroundLabel(line)).map(formatMarketBackground)
       : paragraph).join(' ');

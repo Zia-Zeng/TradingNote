@@ -7,6 +7,7 @@ The core approach of this trade—taking profits in stages during an uptrend and
 
 ## Overview
 Use one Markdown table with one row for every supplied trade, in chronological order. The columns must be Date, Action, Fill price, Quantity, and Amount. Preserve the recorded values and currency. If an amount is missing, calculate price × quantity and label it as calculated. If a date or value is missing, show “Not recorded.” Never omit a supplied transaction. Price and amount should be rounded to two decimal places; quantity should be rounded to one decimal place.
+This section must contain only the trade table. For every asset, omit all introductory or trailing prose, notes, and warnings, including missing-news notices, comparisons between recorded fills and daily price ranges, and requests to verify fills. Do not move these notices or warnings to another section. Preserve the recorded fills without correction; use - for unavailable market values and do not invent news.
 
 ## Market Background
 Use exactly one Markdown table with the columns Indicator and Value. It must contain exactly these seven Indicator rows, in this order and with these exact labels:
