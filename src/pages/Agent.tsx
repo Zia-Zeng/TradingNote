@@ -71,7 +71,8 @@ type BehaviorInsights = {
 };
 
 const TODAY_PRESET_QUESTION = 'How did my trading go today?';
-const REVIEW_PRESET_QUESTION = 'Review my trades in JDF';
+const REVIEW_PRESET_ASSET = '京东方A';
+const REVIEW_PRESET_QUESTION = `Review my trades in ${REVIEW_PRESET_ASSET}`;
 const REVIEW_ACTION_QUESTION = 'Review my recent trades';
 const INSIGHTS_PRESET_QUESTION = 'Analyze my recent trading patterns';
 const DRAFT_PRESET_QUESTION = 'Help me draft a solid investment plan based on my recent holdings.';
@@ -1284,10 +1285,10 @@ export default function Agent() {
       } else if (kind === 'review') {
         const data = await apiRequest<{ conversation_id: string; reply: string }>('/api/agent/chat', {
           method: 'POST',
-          body: JSON.stringify({ message: prompt, action: 'review', asset: 'JDF' }),
+          body: JSON.stringify({ message: prompt, action: 'review', asset: REVIEW_PRESET_ASSET }),
         });
         conversation_id = data.conversation_id;
-        answer = <AgentMarkdown text={data.reply} reviewAsset="JDF" />;
+        answer = <AgentMarkdown text={data.reply} reviewAsset={REVIEW_PRESET_ASSET} />;
       } else {
         const data = await apiRequest<BehaviorInsights>('/api/agent/insights', { method: 'POST' });
         conversation_id = data.conversation_id;
